@@ -64,12 +64,12 @@ namespace WZ2NX
                 Console.WriteLine("Wrote strings in {0}", sw.Elapsed);
                 sw.Reset();
                 sw.Start();
-                Dictionary<WZCanvasProperty, uint> bDict = WriteBitmaps(inFile, bw);
+                Dictionary<WZCanvasProperty, uint> bDict = dumpImg ? WriteBitmaps(inFile, bw) : null;
                 sw.Stop();
                 Console.WriteLine("Wrote bitmaps in {0}", sw.Elapsed);
                 sw.Reset();
                 sw.Start();
-                Dictionary<WZMP3Property, uint> mDict = WriteMP3s(inFile, bw);
+                Dictionary<WZMP3Property, uint> mDict = dumpSnd ? WriteMP3s(inFile, bw) : null;
                 sw.Stop();
                 Console.WriteLine("Wrote MP3s in {0}", sw.Elapsed);
                 sw.Reset();
@@ -156,9 +156,9 @@ namespace WZ2NX
                 uols.Add((WZUOLProperty)n, bw.BaseStream.Position);
                 bw.Write(0U);
             } else if (n is WZCanvasProperty)
-                bw.Write(canvases[(WZCanvasProperty)n]);
+                bw.Write(canvases == null ? 0U : canvases[(WZCanvasProperty)n]);
             else if (n is WZMP3Property)
-                bw.Write(mp3s[(WZMP3Property)n]);
+                bw.Write(mp3s == null ? 0U : mp3s[(WZMP3Property)n]);
 
             if (cc <= 0) return;
             bw.Write(cc);
