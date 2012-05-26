@@ -305,9 +305,9 @@ namespace WZ2NX
         {
             BitmapData bd = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
             int inLen = bd.Stride*bd.Height;
-            int outLen = (int)EMaxOutputLen((IntPtr)inLen);
+            int outLen = EMaxOutputLen(inLen);
             IntPtr outBuf = Marshal.AllocHGlobal(outLen);
-            outLen = (int)ECompressLZ4(bd.Scan0, outBuf, (IntPtr)inLen);
+            outLen = ECompressLZ4(bd.Scan0, outBuf, inLen);
             byte[] @out = new byte[outLen];
             Marshal.Copy(outBuf, @out, 0, outLen);
             Marshal.FreeHGlobal(outBuf);
@@ -327,10 +327,10 @@ namespace WZ2NX
         
 
 #if WIN32
-        [DllImport("lz4_32.dll", EntryPoint = "LZ4_compressHC")]
+        [DllImport("lz4_32.dll", EntryPoint = "LZ4_compressBound")]
         private static extern int EMaxOutputLen(int inputLen);
 #elif WIN64
-        [DllImport("lz4_64.dll", EntryPoint = "LZ4_compressHC")]
+        [DllImport("lz4_64.dll", EntryPoint = "LZ4_compressBound")]
         private static extern int EMaxOutputLen(int inputLen);
 #else
 #error No architecture selected!
