@@ -291,12 +291,12 @@ namespace WZ2NX
 
         private static void NodeCount(WZObject f, ref uint nodeC, ref uint strC, ref uint bitmapC, ref uint sndC)
         {
+			++nodeC;
+			if (f is WZStringProperty) ++strC;
+			else if (f is WZCanvasProperty) ++bitmapC;
+			else if (f is WZMP3Property) ++sndC;
             if (f.ChildCount < 1) return;
             foreach (WZObject c in f) {
-                ++nodeC;
-                if (c is WZStringProperty) ++strC;
-                else if (c is WZCanvasProperty) ++bitmapC;
-                else if (c is WZMP3Property) ++sndC;
                 NodeCount(c, ref nodeC, ref strC, ref bitmapC, ref sndC);
             }
         }
