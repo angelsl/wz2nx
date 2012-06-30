@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Linq;
 using System.Text;
 using Mono.Options;
 using reWZ;
@@ -12,12 +13,122 @@ using reWZ.WZProperties;
 
 namespace WZ2NX
 {
+    internal static class Extensions
+    {
+        public static void Restart(this Stopwatch sw)
+        {
+            sw.Stop();
+            sw.Reset();
+            sw.Start();
+        }
+    }
+
     internal static class Program
     {
+        private class DumpState
+        {
+            private readonly List<WZCanvasProperty> _canvases;
+            private readonly List<WZMP3Property> _mp3s;
+            private readonly Dictionary<WZObject, uint> _nodes;
+            private readonly Dictionary<String, uint> _strings;
+            private readonly Dictionary<WZUOLProperty, Action<BinaryWriter, uint>> _uols;
+
+            public DumpState()
+            {
+                _canvases = new List<WZCanvasProperty>();
+                _strings = new Dictionary<string, uint>(StringComparer.Ordinal) {{"", 0}};
+                _mp3s = new List<WZMP3Property>();
+                _uols = new Dictionary<WZUOLProperty, Action<BinaryWriter, uint>>();
+                _nodes = new Dictionary<WZObject, uint>();
+            }
+
+            public List<WZCanvasProperty> Canvases
+            {
+                get { return _canvases; }
+            }
+
+            public Dictionary<string, uint> Strings
+            {
+                get { return _strings; }
+            }
+
+            public List<WZMP3Property> MP3s
+            {
+                get { return _mp3s; }
+            }
+
+            public Dictionary<WZUOLProperty, Action<BinaryWriter, uint>> UOLs
+            {
+                get { return _uols; }
+            }
+
+            public Dictionary<WZObject, uint> Nodes
+            {
+                get { return _nodes; }
+            }
+
+            public uint AddCanvas(WZCanvasProperty node)
+            {
+                uint ret = (uint)_canvases.Count;
+                _canvases.Add(node);
+                return ret;
+            }
+
+            public uint AddMP3(WZMP3Property node)
+            {
+                uint ret = (uint)_mp3s.Count;
+                _mp3s.Add(node);
+                return ret;
+            }
+
+            public uint AddString(string str)
+            {
+                if (_strings.ContainsKey(str))
+                    return _strings[str];
+                uint ret = (uint)_strings.Count;
+                _strings.Add(str, ret);
+                return ret;
+            }
+
+            public uint AddNode(WZObject node)
+            {
+                uint ret = (uint)_nodes.Count;
+                _nodes.Add(node, ret);
+                return ret;
+            }
+
+            public uint GetNodeID(WZObject node)
+            {
+                return _nodes[node];
+            }
+
+            public void AddUOL(WZUOLProperty node, long currentPosition)
+            {
+                _uols.Add(node, (bw, id) => {
+                                    long cPos = bw.BaseStream.Position;
+                                    bw.BaseStream.Position = currentPosition;
+                                    bw.Write(id);
+                                    bw.BaseStream.Position = cPos;
+                                });
+            }
+        }
+
         private static readonly byte[] PKG2 = {0x50, 0x4B, 0x47, 0x32}; // PKG2
 
         private static void Main(string[] args)
         {
+            Bitmap b = new Bitmap(100, 100, PixelFormat.Format32bppArgb);
+            Graphics g = Graphics.FromImage(b);
+            g.FillRectangle(new SolidBrush(Color.FromArgb(0xFF, 0x7F, 0x3F, 0x1F)), 0,0,100,100);
+            g.Dispose();
+            //BitmapData bd = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            //byte[] pix = new byte[bd.Stride * bd.Height];
+            //Marshal.Copy(bd.Scan0, pix, 0, pix.Length);
+            //b.UnlockBits(bd);
+            File.WriteAllBytes(@"D:\img.daz", GetCompressedBitmap(b));
+            return;
+            #region Option parsing
+
             string inWz = null, outPath = null;
             WZVariant wzVar = (WZVariant)255;
             bool dumpImg = false, dumpSnd = false, initialEnc = true;
@@ -27,7 +138,7 @@ namespace WZ2NX
             oSet.Add("wzv=", "WZ encryption key; required.", a => wzVar = (WZVariant)Enum.Parse(typeof(WZVariant), a, true));
             oSet.Add("Ds|dumpsound", "Set to include sound properties in the NX file.", a => dumpSnd = true);
             oSet.Add("Di|dumpimage", "Set to include canvas properties in the NX file.", a => dumpImg = true);
-            oSet.Add("wzn", "Set if the WZ is not encrypted.", a => initialEnc = false);
+            oSet.Add("wzn", "Set if the input WZ is not encrypted.", a => initialEnc = false);
             oSet.Parse(args);
 
             if (inWz == null || wzVar == (WZVariant)255) {
@@ -36,269 +147,182 @@ namespace WZ2NX
             }
             if (outPath == null)
                 outPath = Path.GetFileNameWithoutExtension(inWz) + ".nx";
+
+            #endregion
+
             Console.WriteLine("Input .wz: {0}{1}Output .nx: {2}", Path.GetFullPath(inWz), Environment.NewLine, Path.GetFullPath(outPath));
-            Stopwatch sw2 = new Stopwatch();
-            sw2.Start();
-            Stopwatch sw = new Stopwatch();
-            sw.Start();
-            using (WZFile inFile = new WZFile(inWz, wzVar, initialEnc, WZReadSelection.EagerParseStrings | WZReadSelection.EagerParseImage))
-            using (FileStream outFile = File.Open(outPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None)) {
-                sw.Stop();
-                Console.WriteLine("Parsed input WZ in {0}", sw.Elapsed);
-                sw.Reset();
-                sw.Start();
-                uint nodesCount = 0, stringsCount = 0, bitmapCount = 0, soundCount = 0;
-                NodeCount(inFile.MainDirectory, ref nodesCount, ref stringsCount, ref bitmapCount, ref soundCount);
-                sw.Stop();
-                Console.WriteLine("N{0}, S{1}, B{2}, M{3}", nodesCount, stringsCount, bitmapCount, soundCount);
-                Console.WriteLine("Counted nodes in {0}", sw.Elapsed);
-                sw.Reset();
-                BinaryWriter bw = new BinaryWriter(outFile);
+            Stopwatch swOperation = new Stopwatch();
+            Stopwatch fullTimer = new Stopwatch();
 
+            Action<string> reportDone = (string str) => { Console.WriteLine("done. E{0} T{1}", swOperation.Elapsed, fullTimer.Elapsed);
+            swOperation.Restart(); Console.Write(str);};
+
+            fullTimer.Start();
+            swOperation.Start();
+            Console.Write("Parsing input WZ... ");
+
+            WZReadSelection rFlags = WZReadSelection.EagerParseImage | WZReadSelection.EagerParseStrings;
+            if(!dumpImg) rFlags |= WZReadSelection.NeverParseCanvas;
+
+            using (WZFile wzf = new WZFile(inWz, wzVar, initialEnc, rFlags))
+            using (FileStream outFs = new FileStream(outPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None))
+            using (BinaryWriter bw = new BinaryWriter(outFs)) {
+                DumpState state = new DumpState();
+
+                reportDone("Writing header... ");
                 bw.Write(PKG2);
-                bw.Write(new byte[12*4]);
+                bw.Write(new byte[(4 + 8)*4]);
 
-                sw.Start();
-                Dictionary<String, uint> stringDict = WriteStrings(inFile, bw);
-                sw.Stop();
-                Console.WriteLine("Wrote strings in {0}", sw.Elapsed);
-                sw.Reset();
-                sw.Start();
-                Dictionary<WZCanvasProperty, uint> bDict = dumpImg ? WriteBitmaps(inFile, bw) : null;
-                sw.Stop();
-                Console.WriteLine("Wrote bitmaps in {0}", sw.Elapsed);
-                sw.Reset();
-                sw.Start();
-                Dictionary<WZMP3Property, uint> mDict = dumpSnd ? WriteMP3s(inFile, bw) : null;
-                sw.Stop();
-                Console.WriteLine("Wrote MP3s in {0}", sw.Elapsed);
-                sw.Reset();
+                reportDone("Writing nodes... ");
+                ulong nodeOffset = (ulong)bw.BaseStream.Position;
+                WriteNode(wzf.MainDirectory, state, bw);
 
-                // now write nodes!
-
-                long nPos = bw.BaseStream.Position;
-                Console.WriteLine("N POS{0}", nPos);
-                bw.Seek(4, SeekOrigin.Begin);
-                bw.Write(nodesCount);
-                bw.Write((ulong)nPos);
-                bw.BaseStream.Position = nPos;
-
-                sw.Start();
-                HashSet<WZObject> ooled = new HashSet<WZObject>();
-                GetUOLedNodes(inFile.MainDirectory, ooled);
-
-                Dictionary<WZObject, uint> uoledid = new Dictionary<WZObject, uint>();
-                Dictionary<WZUOLProperty, long> uoloffsetoffet = new Dictionary<WZUOLProperty, long>();
-                uint asddfa = 0;
-                WriteNode(inFile.MainDirectory, bw, stringDict, mDict, bDict, ooled, ref uoledid, ref uoloffsetoffet, ref asddfa);
-
-                foreach(KeyValuePair<WZUOLProperty, long> fad in uoloffsetoffet) {
-                    bw.BaseStream.Position = fad.Value;
-                    bw.Write(uoledid[fad.Key.ResolveFully()]);
+                reportDone("Writing string data...");
+                ulong stringOffset = (ulong)bw.BaseStream.Position;
+                uint stringCount = (uint)state.Strings.Count;
+                Dictionary<uint, String> strings = state.Strings.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
+                for(uint idx = 0; idx < stringCount; ++idx) {
+                    WriteString(strings[idx], bw);
                 }
 
-                sw.Stop();
-                Console.WriteLine("Wrote nodes in {0}", sw.Elapsed);
-                sw2.Stop();
+                ulong bitmapOffset = 0UL;
+                uint bitmapCount = 0U;
+                if (dumpImg) {
+                    reportDone("Writing canvas data...");
+                    bitmapCount = (uint)state.Canvases.Count;
+                    List<ulong> offsets = new List<ulong>();
+                    foreach (WZCanvasProperty cNode in state.Canvases) {
+                        offsets.Add((ulong)bw.BaseStream.Position);
+                        WriteBitmap(cNode, bw);
+                    }
+                    bitmapOffset = (ulong)bw.BaseStream.Position;
+                    offsets.ForEach(bw.Write);
+                }
+
+                ulong soundOffset = 0UL;
+                uint soundCount = 0U;
+                if(dumpSnd) {
+                    reportDone("Writing MP3 data... ");
+                    soundCount = (uint)state.MP3s.Count;
+                    List<ulong> offsets = new List<ulong>();
+                    foreach(WZMP3Property mNode in state.MP3s) {
+                        offsets.Add((ulong)bw.BaseStream.Position);
+                        WriteMP3(mNode, bw);
+                    }
+                    soundOffset = (ulong)bw.BaseStream.Position;
+                    offsets.ForEach(bw.Write);
+                }
+
+                reportDone("Writing linked node offsets... ");
+                foreach(KeyValuePair<WZUOLProperty, Action<BinaryWriter, uint>> pair in state.UOLs) {
+                    pair.Value(bw, state.GetNodeID(pair.Key));
+                }
+
+                reportDone("Finalising... ");
+
+                bw.Seek(4, SeekOrigin.Begin);
+                bw.Write((uint)state.Nodes.Count);
+                bw.Write(nodeOffset);
+                bw.Write(stringCount);
+                bw.Write(stringOffset);
+                bw.Write(bitmapCount);
+                bw.Write(bitmapOffset);
+                bw.Write(soundCount);
+                bw.Write(soundOffset);
+
+                reportDone("Completed!");
             }
-            Console.WriteLine("Total time taken: {0}", sw2.Elapsed);
             Console.ReadLine();
         }
 
-        private static void WriteNode(WZObject n, BinaryWriter bw, Dictionary<String, uint> strings, Dictionary<WZMP3Property, uint> mp3s, Dictionary<WZCanvasProperty, uint> canvases, HashSet<WZObject> uoled, ref Dictionary<WZObject, uint> uoledoffsets, ref Dictionary<WZUOLProperty, long> uols, ref uint nids)
+        private static void WriteNode(WZObject node, DumpState ds, BinaryWriter bw)
         {
-            if (uoled.Contains(n))
-                uoledoffsets.Add(n, nids);
-            ++nids;
-            bw.Write(strings[n.Name]);
-            ushort cc = (ushort)n.ChildCount;
-            byte type = (byte)(cc > 0 ? 0x80 : 0);
-            bool brokenUol = false;
-            if (n is WZUInt16Property || n is WZInt32Property)
-                type |= 1;
-            else if (n is WZSingleProperty || n is WZDoubleProperty)
-                type |= 2;
-            else if (n is WZStringProperty)
-                type |= 3;
-            else if (n is WZPointProperty)
-                type |= 4;
-            else if (n is WZCanvasProperty)
-                type |= 5;
-            else if (n is WZMP3Property)
-                type |= 6;
-            else if (n is WZUOLProperty) {
-                try {
-                    ((WZUOLProperty)n).ResolveFully();
-                }
-                catch(KeyNotFoundException) {
-                    brokenUol = true;
-                }
-                if (!brokenUol) type |= 7;
-            }
+            ds.AddNode(node);
+            bw.Write(ds.AddString(node.Name));
+
+            byte type;
+            bool children = node.ChildCount > 0;
+
+            if (node is WZDirectory || node is WZImage || node is WZSubProperty || node is WZConvexProperty || node is WZNullProperty)
+                type = 0; // no data; children only
+            else if (node is WZInt32Property || node is WZUInt16Property)
+                type = 1; // int32
+            else if (node is WZSingleProperty || node is WZDoubleProperty)
+                type = 2; // Double
+            else if (node is WZStringProperty)
+                type = 3; // String
+            else if (node is WZPointProperty)
+                type = 4;
+            else if (node is WZCanvasProperty)
+                type = 5;
+            else if (node is WZMP3Property)
+                type = 6;
+            else if (node is WZUOLProperty)
+                type = 7;
+            else
+                throw new InvalidOperationException("Unhandled WZ node type [1]");
+            if (children)
+                type |= 0x80;
 
             bw.Write(type);
 
-            if (n is WZUInt16Property)
-                bw.Write((int)n.ValueOrDie<ushort>());
-            else if (n is WZInt32Property)
-                bw.Write(n.ValueOrDie<int>());
-            else if (n is WZSingleProperty)
-                bw.Write((double)n.ValueOrDie<Single>());
-            else if (n is WZDoubleProperty)
-                bw.Write(n.ValueOrDie<Double>());
-            else if (n is WZStringProperty)
-                bw.Write(strings[n.ValueOrDie<String>()]);
-            else if (n is WZPointProperty) {
-                WZPointProperty v = (WZPointProperty)n;
-                bw.Write(v.Value.X);
-                bw.Write(v.Value.Y);
-            } else if (!brokenUol && n is WZUOLProperty) {
-                uols.Add((WZUOLProperty)n, bw.BaseStream.Position);
+            if (node is WZInt32Property)
+                bw.Write(((WZInt32Property)node).Value);
+            else if (node is WZUInt16Property)
+                bw.Write((int)((WZUInt16Property)node).Value);
+            else if (node is WZSingleProperty)
+                bw.Write((double)((WZSingleProperty)node).Value);
+            else if (node is WZDoubleProperty)
+                bw.Write(((WZDoubleProperty)node).Value);
+            else if (node is WZStringProperty)
+                bw.Write(ds.AddString(((WZStringProperty)node).Value));
+            else if (node is WZPointProperty) {
+                Point pNode = ((WZPointProperty)node).Value;
+                bw.Write(pNode.X);
+                bw.Write(pNode.Y);
+            } else if (node is WZCanvasProperty)
+                bw.Write(ds.AddCanvas((WZCanvasProperty)node));
+            else if (node is WZMP3Property)
+                bw.Write(ds.AddMP3((WZMP3Property)node));
+            else if (node is WZUOLProperty) {
+                ds.AddUOL((WZUOLProperty)node, bw.BaseStream.Position);
                 bw.Write(0U);
-            } else if (n is WZCanvasProperty)
-                bw.Write(canvases == null ? 0U : canvases[(WZCanvasProperty)n]);
-            else if (n is WZMP3Property)
-                bw.Write(mp3s == null ? 0U : mp3s[(WZMP3Property)n]);
-
-            if (cc <= 0) return;
-            bw.Write(cc);
-            foreach (WZObject c in n)
-                WriteNode(c, bw, strings, mp3s, canvases, uoled, ref uoledoffsets, ref uols, ref nids);
-        }
-
-        private static Dictionary<String, uint> WriteStrings(WZFile infile, BinaryWriter bw)
-        {
-            List<String> strs = new List<string>(GetStrings(infile));
-
-            long strPos = bw.BaseStream.Position;
-            Console.WriteLine("S POS{0}", strPos);
-            bw.Seek(16, SeekOrigin.Begin);
-            bw.Write((uint)strs.Count);
-            bw.Write((ulong)strPos);
-            bw.BaseStream.Position = strPos;
-            uint strId = 0;
-            Dictionary<String, uint> ret = new Dictionary<string, uint>(strs.Count, StringComparer.Ordinal);
-            foreach (string s in strs) {
-                string r = s;
-                ret.Add(s, strId++);
-                byte[] utf = Encoding.UTF8.GetBytes(r);
-                bw.Write((ushort)utf.Length);
-                bw.Write(utf);
             }
-            return ret;
+            else if (!(node is WZDirectory || node is WZImage || node is WZSubProperty || node is WZConvexProperty || node is WZNullProperty))
+                throw new InvalidOperationException("Unhandled WZ node type [2]");
+            if (!children) return;
+            bw.Write((ushort)node.ChildCount);
+            foreach (WZObject cNode in node) WriteNode(cNode, ds, bw);
         }
 
-        private static Dictionary<WZCanvasProperty, uint> WriteBitmaps(WZFile infile, BinaryWriter bw)
+        private static void WriteString(string s, BinaryWriter bw)
         {
-            HashSet<WZCanvasProperty> cs = new HashSet<WZCanvasProperty>();
-            GetCanvasNodes(infile.MainDirectory, cs);
-            List<ulong> offsets = new List<ulong>();
-            Dictionary<WZCanvasProperty, uint> cids =  new Dictionary<WZCanvasProperty, uint>();
-            uint id = 0;
-            foreach(WZCanvasProperty c in cs) {
-                cids.Add(c, id++);
-                offsets.Add((ulong)bw.BaseStream.Position);
-                Bitmap b = c.Value;
-                bw.Write((ushort)b.Width);
-                bw.Write((ushort)b.Height);
-                byte[] com = GetCompressedBitmap(b);
-                c.Dispose();
-                bw.Write((uint)com.Length);
-                bw.Write(com);
-            }
-            long bmPos = bw.BaseStream.Position;
-            bw.Seek(28, SeekOrigin.Begin);
-            bw.Write((uint)cs.Count);
-            bw.Write((ulong)bmPos);
-            bw.BaseStream.Position = bmPos;
-            foreach(ulong u in offsets) {
-                bw.Write(u);
-            }
-            return cids;
+            byte[] toWrite = Encoding.UTF8.GetBytes(s);
+            bw.Write((ushort)toWrite.Length);
+            bw.Write(toWrite);
         }
 
-        private static Dictionary<WZMP3Property, uint> WriteMP3s(WZFile infile, BinaryWriter bw)
+        private static void WriteBitmap(WZCanvasProperty node, BinaryWriter bw)
         {
-            HashSet<WZMP3Property> mp3s = new HashSet<WZMP3Property>();
-            GetMP3Nodes(infile.MainDirectory, mp3s);
-            List<ulong> offsets = new List<ulong>();
-            Dictionary<WZMP3Property, uint> mp3ids = new Dictionary<WZMP3Property, uint>();
-            uint id = 0;
-            foreach(WZMP3Property mp in mp3s) {
-                mp3ids.Add(mp, id++);
-                offsets.Add((ulong)bw.BaseStream.Position);
-                byte[] ba = mp.Value;
-                bw.Write((uint)ba.Length);
-                bw.Write(ba);
-                mp.Dispose();
-            }
-            long bmPos = bw.BaseStream.Position;
-            bw.Seek(40, SeekOrigin.Begin);
-            bw.Write((uint)mp3s.Count);
-            bw.Write((ulong)bmPos);
-            bw.BaseStream.Position = bmPos;
-            foreach(ulong u in offsets) {
-                bw.Write(u);
-            }
-            return mp3ids;
+            Bitmap b = node.Value;
+            bw.Write((ushort)b.Width);
+            bw.Write((ushort)b.Height);
+
+            byte[] compressed = GetCompressedBitmap(b);
+            node.Dispose();
+            b = null;
+
+            bw.Write((uint)compressed.Length);
+            bw.Write(compressed);
         }
 
-        private static IEnumerable<string> GetStrings(WZFile f)
+        private static void WriteMP3(WZMP3Property node, BinaryWriter bw)
         {
-            HashSet<String> r = new HashSet<string>(StringComparer.Ordinal) {string.Empty};
-            foreach (WZObject c in f.MainDirectory)
-                GetStrings(c, r);
-            return r;
-        }
-
-        private static void GetStrings(WZObject f, HashSet<String> strs)
-        {
-            strs.Add(f.Name);
-            if (f is WZStringProperty) strs.Add(f.ValueOrDie<String>());
-            if (f.ChildCount < 1) return;
-            foreach (WZObject c in f)
-                GetStrings(c, strs);
-        }
-
-        private static void GetUOLedNodes(WZObject f, HashSet<WZObject> refObjs)
-        {
-            var wzuolProperty = f as WZUOLProperty;
-            try {
-                if (wzuolProperty != null) refObjs.Add((wzuolProperty).ResolveFully());
-            } catch(KeyNotFoundException) {
-                Console.WriteLine("UOL {0} has invalid link to {1}", f.Path, wzuolProperty.Value);
-            }
-            if (f.ChildCount < 1) return;
-            foreach (WZObject c in f)
-                GetUOLedNodes(c, refObjs);
-        }
-
-        private static void GetMP3Nodes(WZObject f, HashSet<WZMP3Property> refObjs)
-        {
-            if (f is WZMP3Property) refObjs.Add((WZMP3Property)f);
-            else if(f.ChildCount > 0)
-                foreach(WZObject c in f)
-                    GetMP3Nodes(c, refObjs);
-        }
-
-        private static void GetCanvasNodes(WZObject f, HashSet<WZCanvasProperty> refObjs)
-        {
-            if (f is WZCanvasProperty) refObjs.Add((WZCanvasProperty)f);
-            if (f.ChildCount > 0)
-                foreach (WZObject c in f)
-                    GetCanvasNodes(c, refObjs);
-        }
-
-        private static void NodeCount(WZObject f, ref uint nodeC, ref uint strC, ref uint bitmapC, ref uint sndC)
-        {
-			++nodeC;
-			if (f is WZStringProperty) ++strC;
-			else if (f is WZCanvasProperty) ++bitmapC;
-			else if (f is WZMP3Property) ++sndC;
-            if (f.ChildCount < 1) return;
-            foreach (WZObject c in f) {
-                NodeCount(c, ref nodeC, ref strC, ref bitmapC, ref sndC);
-            }
+            byte[] m = node.Value;
+            bw.Write((uint)m.Length);
+            bw.Write(m);
+            node.Dispose();
+            m = null;
         }
 
         private static byte[] GetCompressedBitmap(Bitmap b)
@@ -306,25 +330,22 @@ namespace WZ2NX
             BitmapData bd = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
             int inLen = bd.Stride*bd.Height;
             int outLen = EMaxOutputLen(inLen);
-            IntPtr outBuf = Marshal.AllocHGlobal(outLen);
+            byte[] outBuf = new byte[outLen];
             outLen = ECompressLZ4(bd.Scan0, outBuf, inLen);
-            byte[] @out = new byte[outLen];
-            Marshal.Copy(outBuf, @out, 0, outLen);
-            Marshal.FreeHGlobal(outBuf);
             b.UnlockBits(bd);
-            return @out;
+            Array.Resize(ref outBuf, outLen);
+            return outBuf;
         }
 
 #if WIN32
-        [DllImport("lz4_32.dll", EntryPoint = "LZ4_compressHC")]
-        private static extern int ECompressLZ4(IntPtr source, IntPtr dest, int inputLen);
+        [DllImport("lz4_32.dll", EntryPoint = "LZ4_compress")]
+        private static extern int ECompressLZ4(IntPtr source, byte[] dest, int inputLen);
 #elif WIN64
         [DllImport("lz4_64.dll", EntryPoint = "LZ4_compressHC")]
-        private static extern int ECompressLZ4(IntPtr source, IntPtr dest, int inputLen);
+        private static extern int ECompressLZ4(IntPtr source, byte[] dest, int inputLen);
 #else
 #error No architecture selected!
 #endif
-        
 
 #if WIN32
         [DllImport("lz4_32.dll", EntryPoint = "LZ4_compressBound")]
@@ -335,6 +356,5 @@ namespace WZ2NX
 #else
 #error No architecture selected!
 #endif
-        
     }
 }
