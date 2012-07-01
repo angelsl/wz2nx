@@ -117,16 +117,6 @@ namespace WZ2NX
 
         private static void Main(string[] args)
         {
-            Bitmap b = new Bitmap(100, 100, PixelFormat.Format32bppArgb);
-            Graphics g = Graphics.FromImage(b);
-            g.FillRectangle(new SolidBrush(Color.FromArgb(0xFF, 0x7F, 0x3F, 0x1F)), 0,0,100,100);
-            g.Dispose();
-            //BitmapData bd = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-            //byte[] pix = new byte[bd.Stride * bd.Height];
-            //Marshal.Copy(bd.Scan0, pix, 0, pix.Length);
-            //b.UnlockBits(bd);
-            File.WriteAllBytes(@"D:\img.daz", GetCompressedBitmap(b));
-            return;
             #region Option parsing
 
             string inWz = null, outPath = null;
