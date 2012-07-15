@@ -149,7 +149,7 @@ namespace WZ2NX
 
             fullTimer.Start();
             swOperation.Start();
-            Console.Write("Parsing input WZ... ");
+            Console.Write("Parsing input WZ... ".PadRight(31));
 
             WZReadSelection rFlags = WZReadSelection.EagerParseImage | WZReadSelection.EagerParseStrings;
             if(!dumpImg) rFlags |= WZReadSelection.NeverParseCanvas;
@@ -159,15 +159,15 @@ namespace WZ2NX
             using (BinaryWriter bw = new BinaryWriter(outFs)) {
                 DumpState state = new DumpState();
 
-                reportDone("Writing header... ");
+                reportDone("Writing header... ".PadRight(31));
                 bw.Write(PKG2);
                 bw.Write(new byte[(4 + 8)*4]);
 
-                reportDone("Writing nodes... ");
+                reportDone("Writing nodes... ".PadRight(31));
                 ulong nodeOffset = (ulong)bw.BaseStream.Position;
                 WriteNode(wzf.MainDirectory, state, bw);
 
-                reportDone("Writing string data...");
+                reportDone("Writing string data...".PadRight(31));
                 ulong stringOffset = (ulong)bw.BaseStream.Position;
                 uint stringCount = (uint)state.Strings.Count;
                 Dictionary<uint, String> strings = state.Strings.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
@@ -178,7 +178,7 @@ namespace WZ2NX
                 ulong bitmapOffset = 0UL;
                 uint bitmapCount = 0U;
                 if (dumpImg) {
-                    reportDone("Writing canvas data...");
+                    reportDone("Writing canvas data...".PadRight(31));
                     bitmapCount = (uint)state.Canvases.Count;
                     List<ulong> offsets = new List<ulong>();
                     foreach (WZCanvasProperty cNode in state.Canvases) {
@@ -192,7 +192,7 @@ namespace WZ2NX
                 ulong soundOffset = 0UL;
                 uint soundCount = 0U;
                 if(dumpSnd) {
-                    reportDone("Writing MP3 data... ");
+                    reportDone("Writing MP3 data... ".PadRight(31));
                     soundCount = (uint)state.MP3s.Count;
                     List<ulong> offsets = new List<ulong>();
                     foreach(WZMP3Property mNode in state.MP3s) {
@@ -203,12 +203,12 @@ namespace WZ2NX
                     offsets.ForEach(bw.Write);
                 }
 
-                reportDone("Writing linked node offsets... ");
+                reportDone("Writing linked node offsets... ".PadRight(31));
                 foreach(KeyValuePair<WZUOLProperty, Action<BinaryWriter, uint>> pair in state.UOLs) {
                     pair.Value(bw, state.GetNodeID(pair.Key));
                 }
 
-                reportDone("Finalising... ");
+                reportDone("Finalising... ".PadRight(31));
 
                 bw.Seek(4, SeekOrigin.Begin);
                 bw.Write((uint)state.Nodes.Count);
