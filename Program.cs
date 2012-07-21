@@ -31,14 +31,14 @@ namespace WZ2NX
             private readonly List<WZMP3Property> _mp3s;
             private readonly Dictionary<WZObject, uint> _nodes;
             private readonly Dictionary<String, uint> _strings;
-            private readonly Dictionary<WZUOLProperty, Action<BinaryWriter, uint>> _uols;
+            private readonly Dictionary<WZUOLProperty, Action<BinaryWriter, byte[]>> _uols;
 
             public DumpState()
             {
                 _canvases = new List<WZCanvasProperty>();
                 _strings = new Dictionary<string, uint>(StringComparer.Ordinal) {{"", 0}};
                 _mp3s = new List<WZMP3Property>();
-                _uols = new Dictionary<WZUOLProperty, Action<BinaryWriter, uint>>();
+                _uols = new Dictionary<WZUOLProperty, Action<BinaryWriter, byte[]>>();
                 _nodes = new Dictionary<WZObject, uint>();
             }
 
@@ -57,7 +57,7 @@ namespace WZ2NX
                 get { return _mp3s; }
             }
 
-            public Dictionary<WZUOLProperty, Action<BinaryWriter, uint>> UOLs
+            public Dictionary<WZUOLProperty, Action<BinaryWriter, byte[]>> UOLs
             {
                 get { return _uols; }
             }
@@ -102,18 +102,21 @@ namespace WZ2NX
                 return _nodes[node];
             }
 
+            public uint GetNextNodeID()
+            {
+                return (uint)_nodes.Count;
+            }
+
             public void AddUOL(WZUOLProperty node, long currentPosition)
             {
-                _uols.Add(node, (bw, id) => {
-                                    long cPos = bw.BaseStream.Position;
+                _uols.Add(node, (bw, data) => {
                                     bw.BaseStream.Position = currentPosition;
-                                    bw.Write(id);
-                                    bw.BaseStream.Position = cPos;
+                                    bw.Write(data);
                                 });
             }
         }
 
-        private static readonly byte[] PKG2 = {0x50, 0x4B, 0x47, 0x32}; // PKG2
+        private static readonly byte[] PKG3 = {0x50, 0x4B, 0x47, 0x33}; // PKG3
 
         private static void Main(string[] args)
         {
@@ -160,12 +163,14 @@ namespace WZ2NX
                 DumpState state = new DumpState();
 
                 reportDone("Writing header... ".PadRight(31));
-                bw.Write(PKG2);
+                bw.Write(PKG3);
                 bw.Write(new byte[(4 + 8)*4]);
 
                 reportDone("Writing nodes... ".PadRight(31));
                 ulong nodeOffset = (ulong)bw.BaseStream.Position;
-                WriteNode(wzf.MainDirectory, state, bw);
+                List<WZObject> nodeLevel = new List<WZObject> {wzf.MainDirectory};
+                while(nodeLevel.Count > 0)
+                    WriteNodeLevel(ref nodeLevel, state, bw);
 
                 reportDone("Writing string data...".PadRight(31));
                 ulong stringOffset = (ulong)bw.BaseStream.Position;
@@ -203,9 +208,14 @@ namespace WZ2NX
                     offsets.ForEach(bw.Write);
                 }
 
-                reportDone("Writing linked node offsets... ".PadRight(31));
-                foreach(KeyValuePair<WZUOLProperty, Action<BinaryWriter, uint>> pair in state.UOLs) {
-                    pair.Value(bw, state.GetNodeID(pair.Key));
+                reportDone("Writing linked node data... ".PadRight(31));
+                byte[] uolReplace = new byte[16];
+                foreach(KeyValuePair<WZUOLProperty, Action<BinaryWriter, byte[]>> pair in state.UOLs) {
+                    WZObject result = SafeResolveUOL(pair.Key);
+                    if(result == null) continue;
+                    bw.BaseStream.Position = (long)(nodeOffset + state.GetNodeID(result)*20 + 4);
+                    bw.BaseStream.Read(uolReplace, 0, 16);
+                    pair.Value(bw, uolReplace);
                 }
 
                 reportDone("Finalising... ".PadRight(31));
@@ -225,34 +235,73 @@ namespace WZ2NX
             Console.ReadLine();
         }
 
-        private static void WriteNode(WZObject node, DumpState ds, BinaryWriter bw)
+        private static WZObject SafeResolveUOL(WZUOLProperty uol)
+        {
+            HashSet<WZObject> results = new HashSet<WZObject> {uol};
+
+            WZObject ret = uol;
+            try {
+                WZUOLProperty rUol;
+                while ((rUol = ret as WZUOLProperty) != null) {
+                    ret = rUol.Resolve();
+                    if (ret == null || results.Contains(ret)) return null;
+                    results.Add(ret);
+                }
+            } catch(KeyNotFoundException) {
+                return null;
+            }
+            return ret;
+        }
+
+        private static void WriteNodeLevel(ref List<WZObject> nodeLevel, DumpState ds, BinaryWriter bw)
+        {
+            uint nextChildId = (uint)(ds.GetNextNodeID() + nodeLevel.Count); 
+            foreach(WZObject levelNode in nodeLevel) {
+                if(levelNode is WZUOLProperty)
+                    WriteUOL((WZUOLProperty)levelNode, ds, bw);
+                else WriteNode(levelNode, ds, bw, nextChildId);
+                nextChildId += (uint)levelNode.ChildCount;
+            }
+            List<WZObject> @out = new List<WZObject>();
+            foreach (WZObject levelNode in nodeLevel.Where(n => n.ChildCount > 0)) {
+                @out.AddRange(levelNode);
+            }
+            nodeLevel.Clear();
+            nodeLevel = @out;
+        }
+
+        private static void WriteUOL(WZUOLProperty node, DumpState ds, BinaryWriter bw)
         {
             ds.AddNode(node);
             bw.Write(ds.AddString(node.Name));
+            ds.AddUOL(node, bw.BaseStream.Position);
+            bw.Write(0L);
+            bw.Write(0L);
+        }
 
-            byte type;
-            bool children = node.ChildCount > 0;
+        private static void WriteNode(WZObject node, DumpState ds, BinaryWriter bw, uint nextChildID)
+        {
+            ds.AddNode(node);
+            bw.Write(ds.AddString(node.Name));
+            bw.Write((ushort)node.ChildCount);
+            ushort type;
 
             if (node is WZDirectory || node is WZImage || node is WZSubProperty || node is WZConvexProperty || node is WZNullProperty)
-                type = 0; // no data; children only
+                type = 0; // no data; children only (8)
             else if (node is WZInt32Property || node is WZUInt16Property)
-                type = 1; // int32
+                type = 1; // int32 (4)
             else if (node is WZSingleProperty || node is WZDoubleProperty)
-                type = 2; // Double
+                type = 2; // Double (0)
             else if (node is WZStringProperty)
-                type = 3; // String
+                type = 3; // String (4)
             else if (node is WZPointProperty)
-                type = 4;
+                type = 4; // (0)
             else if (node is WZCanvasProperty)
-                type = 5;
+                type = 5; // (4)
             else if (node is WZMP3Property)
-                type = 6;
-            else if (node is WZUOLProperty)
-                type = 7;
+                type = 6; // (4)
             else
                 throw new InvalidOperationException("Unhandled WZ node type [1]");
-            if (children)
-                type |= 0x80;
 
             bw.Write(type);
 
@@ -266,23 +315,30 @@ namespace WZ2NX
                 bw.Write(((WZDoubleProperty)node).Value);
             else if (node is WZStringProperty)
                 bw.Write(ds.AddString(((WZStringProperty)node).Value));
-            else if (node is WZPointProperty) {
+            else if (node is WZPointProperty)
+            {
                 Point pNode = ((WZPointProperty)node).Value;
                 bw.Write(pNode.X);
                 bw.Write(pNode.Y);
-            } else if (node is WZCanvasProperty)
+            }
+            else if (node is WZCanvasProperty)
                 bw.Write(ds.AddCanvas((WZCanvasProperty)node));
             else if (node is WZMP3Property)
                 bw.Write(ds.AddMP3((WZMP3Property)node));
-            else if (node is WZUOLProperty) {
-                ds.AddUOL((WZUOLProperty)node, bw.BaseStream.Position);
-                bw.Write(0U);
+
+            switch(type) {
+                case 0:
+                    bw.Write(0L);
+                    break;
+                case 1:
+                case 3:
+                case 5:
+                case 6:
+                    bw.Write(0);
+                    break;
             }
-            else if (!(node is WZDirectory || node is WZImage || node is WZSubProperty || node is WZConvexProperty || node is WZNullProperty))
-                throw new InvalidOperationException("Unhandled WZ node type [2]");
-            if (!children) return;
-            bw.Write((ushort)node.ChildCount);
-            foreach (WZObject cNode in node) WriteNode(cNode, ds, bw);
+
+            bw.Write(nextChildID);
         }
 
         private static void WriteString(string s, BinaryWriter bw)
