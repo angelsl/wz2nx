@@ -384,7 +384,7 @@ namespace WZ2NX
         }
 
 #if WIN32
-        [DllImport("lz4_32.dll", EntryPoint = "LZ4_compress")]
+        [DllImport("lz4_32.dll", EntryPoint = "LZ4_compressHC")]
         private static extern int ECompressLZ4(IntPtr source, byte[] dest, int inputLen);
 #elif WIN64
         [DllImport("lz4_64.dll", EntryPoint = "LZ4_compressHC")]
