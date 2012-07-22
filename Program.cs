@@ -240,14 +240,21 @@ namespace WZ2NX
             HashSet<WZObject> results = new HashSet<WZObject> {uol};
 
             WZObject ret = uol;
-            try {
+            try
+            {
                 WZUOLProperty rUol;
-                while ((rUol = ret as WZUOLProperty) != null) {
+                while ((rUol = ret as WZUOLProperty) != null)
+                {
                     ret = rUol.Resolve();
                     if (ret == null || results.Contains(ret)) return null;
                     results.Add(ret);
                 }
-            } catch(KeyNotFoundException) {
+            }
+            catch (KeyNotFoundException)
+            {
+                return null;
+            }
+            catch (NotSupportedException) {
                 return null;
             }
             return ret;
