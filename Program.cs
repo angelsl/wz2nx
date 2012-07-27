@@ -117,6 +117,8 @@ namespace WZ2NX
         }
 
         private static readonly byte[] PKG3 = {0x50, 0x4B, 0x47, 0x33}; // PKG3
+        private static readonly bool _is64bit = IntPtr.Size == 8;
+
 
         private static void Main(string[] args)
         {
@@ -382,32 +384,21 @@ namespace WZ2NX
         {
             BitmapData bd = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
             int inLen = bd.Stride*bd.Height;
-            int outLen = EMaxOutputLen(inLen);
+            int outLen = _is64bit ? EMaxOutputLen64(inLen) : EMaxOutputLen32(inLen);
             byte[] outBuf = new byte[outLen];
-            outLen = ECompressLZ4(bd.Scan0, outBuf, inLen);
+            outLen = _is64bit ? ECompressLZ464(bd.Scan0, outBuf, inLen) : ECompressLZ432(bd.Scan0, outBuf, inLen);
             b.UnlockBits(bd);
             Array.Resize(ref outBuf, outLen);
             return outBuf;
         }
 
-#if WIN32
         [DllImport("lz4_32.dll", EntryPoint = "LZ4_compressHC")]
-        private static extern int ECompressLZ4(IntPtr source, byte[] dest, int inputLen);
-#elif WIN64
+        private static extern int ECompressLZ432(IntPtr source, byte[] dest, int inputLen);
         [DllImport("lz4_64.dll", EntryPoint = "LZ4_compressHC")]
-        private static extern int ECompressLZ4(IntPtr source, byte[] dest, int inputLen);
-#else
-#error No architecture selected!
-#endif
-
-#if WIN32
+        private static extern int ECompressLZ464(IntPtr source, byte[] dest, int inputLen);
         [DllImport("lz4_32.dll", EntryPoint = "LZ4_compressBound")]
-        private static extern int EMaxOutputLen(int inputLen);
-#elif WIN64
+        private static extern int EMaxOutputLen32(int inputLen);
         [DllImport("lz4_64.dll", EntryPoint = "LZ4_compressBound")]
-        private static extern int EMaxOutputLen(int inputLen);
-#else
-#error No architecture selected!
-#endif
+        private static extern int EMaxOutputLen64(int inputLen);
     }
 }
