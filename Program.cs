@@ -25,7 +25,7 @@ namespace WZ2NX
 
     internal static class Program
     {
-        private class DumpState
+        private sealed class DumpState
         {
             private readonly List<WZCanvasProperty> _canvases;
             private readonly List<WZMP3Property> _mp3s;
@@ -90,11 +90,10 @@ namespace WZ2NX
                 return ret;
             }
 
-            public uint AddNode(WZObject node)
+            public void AddNode(WZObject node)
             {
                 uint ret = (uint)_nodes.Count;
                 _nodes.Add(node, ret);
-                return ret;
             }
 
             public uint GetNodeID(WZObject node)
@@ -149,7 +148,7 @@ namespace WZ2NX
             Stopwatch swOperation = new Stopwatch();
             Stopwatch fullTimer = new Stopwatch();
 
-            Action<string> reportDone = (string str) => { Console.WriteLine("done. E{0} T{1}", swOperation.Elapsed, fullTimer.Elapsed);
+            Action<string> reportDone = str => { Console.WriteLine("done. E{0} T{1}", swOperation.Elapsed, fullTimer.Elapsed);
             swOperation.Restart(); Console.Write(str);};
 
             fullTimer.Start();
