@@ -115,9 +115,16 @@ namespace WZ2NX
             }
         }
 
-        private static readonly byte[] PKG3 = {0x50, 0x4B, 0x47, 0x33}; // PKG3
+        private static readonly byte[] PKG4 = {0x50, 0x4B, 0x47, 0x34}; // PKG3
         private static readonly bool _is64bit = IntPtr.Size == 8;
+        private static bool dumpImg = false, dumpSnd = false;
 
+        private static void EnsureMultiple(this Stream s, int multiple)
+        {
+            int skip = (int)(multiple - (s.Position%multiple));
+            if (skip == multiple) return;
+            s.Write(new byte[skip], 0, skip);
+        }
 
         private static void Main(string[] args)
         {
@@ -125,7 +132,7 @@ namespace WZ2NX
 
             string inWz = null, outPath = null;
             WZVariant wzVar = (WZVariant)255;
-            bool dumpImg = false, dumpSnd = false, initialEnc = true;
+            bool initialEnc = true;
             OptionSet oSet = new OptionSet();
             oSet.Add("in=", "Path to input WZ; required.", a => inWz = a);
             oSet.Add("out=", "Path to output NX; optional, defaults to <WZ file name>.nx in this directory", a => outPath = a);
@@ -164,21 +171,32 @@ namespace WZ2NX
                 DumpState state = new DumpState();
 
                 reportDone("Writing header... ".PadRight(31));
-                bw.Write(PKG3);
+                bw.Write(PKG4);
                 bw.Write(new byte[(4 + 8)*4]);
 
                 reportDone("Writing nodes... ".PadRight(31));
+                outFs.EnsureMultiple(4);
                 ulong nodeOffset = (ulong)bw.BaseStream.Position;
                 List<WZObject> nodeLevel = new List<WZObject> {wzf.MainDirectory};
                 while(nodeLevel.Count > 0)
                     WriteNodeLevel(ref nodeLevel, state, bw);
 
-                reportDone("Writing string data...".PadRight(31));
-                ulong stringOffset = (ulong)bw.BaseStream.Position;
+                ulong stringOffset;
                 uint stringCount = (uint)state.Strings.Count;
-                Dictionary<uint, String> strings = state.Strings.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
-                for(uint idx = 0; idx < stringCount; ++idx) {
-                    WriteString(strings[idx], bw);
+                {
+                    reportDone("Writing string data...".PadRight(31));
+                    Dictionary<uint, String> strings = state.Strings.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
+                    ulong[] offsets = new ulong[stringCount];
+                    for(uint idx = 0; idx < stringCount; ++idx) {
+                        outFs.EnsureMultiple(2);
+                        offsets[idx] = (ulong)bw.BaseStream.Position;
+                        WriteString(strings[idx], bw);
+                    }
+
+                    outFs.EnsureMultiple(8);
+                    stringOffset = (ulong)bw.BaseStream.Position;
+                    for(uint idx = 0; idx < stringCount; ++idx)
+                        bw.Write(offsets[idx]);
                 }
 
                 ulong bitmapOffset = 0UL;
@@ -186,13 +204,17 @@ namespace WZ2NX
                 if (dumpImg) {
                     reportDone("Writing canvas data...".PadRight(31));
                     bitmapCount = (uint)state.Canvases.Count;
-                    List<ulong> offsets = new List<ulong>();
+                    ulong[] offsets = new ulong[bitmapCount];
+                    long cId = 0;
                     foreach (WZCanvasProperty cNode in state.Canvases) {
-                        offsets.Add((ulong)bw.BaseStream.Position);
+                        outFs.EnsureMultiple(8);
+                        offsets[cId++] = (ulong)bw.BaseStream.Position;
                         WriteBitmap(cNode, bw);
                     }
+                    outFs.EnsureMultiple(8);
                     bitmapOffset = (ulong)bw.BaseStream.Position;
-                    offsets.ForEach(bw.Write);
+                    for (uint idx = 0; idx < bitmapCount; ++idx)
+                        bw.Write(offsets[idx]);
                 }
 
                 ulong soundOffset = 0UL;
@@ -200,13 +222,17 @@ namespace WZ2NX
                 if(dumpSnd) {
                     reportDone("Writing MP3 data... ".PadRight(31));
                     soundCount = (uint)state.MP3s.Count;
-                    List<ulong> offsets = new List<ulong>();
+                    ulong[] offsets = new ulong[soundCount];
+                    long cId = 0;
                     foreach(WZMP3Property mNode in state.MP3s) {
-                        offsets.Add((ulong)bw.BaseStream.Position);
+                        outFs.EnsureMultiple(8);
+                        offsets[cId++] = (ulong)bw.BaseStream.Position;
                         WriteMP3(mNode, bw);
                     }
+                    outFs.EnsureMultiple(8);
                     soundOffset = (ulong)bw.BaseStream.Position;
-                    offsets.ForEach(bw.Write);
+                    for (uint idx = 0; idx < soundCount; ++idx)
+                        bw.Write(offsets[idx]);
                 }
 
                 reportDone("Writing linked node data... ".PadRight(31));
@@ -272,7 +298,7 @@ namespace WZ2NX
             }
             List<WZObject> @out = new List<WZObject>();
             foreach (WZObject levelNode in nodeLevel.Where(n => n.ChildCount > 0)) {
-                @out.AddRange(levelNode);
+                @out.AddRange(levelNode.OrderBy(f => f.Name, StringComparer.Ordinal));
             }
             nodeLevel.Clear();
             nodeLevel = @out;
@@ -291,6 +317,7 @@ namespace WZ2NX
         {
             ds.AddNode(node);
             bw.Write(ds.AddString(node.Name));
+            bw.Write(nextChildID);
             bw.Write((ushort)node.ChildCount);
             ushort type;
 
@@ -314,9 +341,9 @@ namespace WZ2NX
             bw.Write(type);
 
             if (node is WZInt32Property)
-                bw.Write(((WZInt32Property)node).Value);
+                bw.Write((long)((WZInt32Property)node).Value);
             else if (node is WZUInt16Property)
-                bw.Write((int)((WZUInt16Property)node).Value);
+                bw.Write((long)((WZUInt16Property)node).Value);
             else if (node is WZSingleProperty)
                 bw.Write((double)((WZSingleProperty)node).Value);
             else if (node is WZDoubleProperty)
@@ -329,24 +356,35 @@ namespace WZ2NX
                 bw.Write(pNode.X);
                 bw.Write(pNode.Y);
             }
-            else if (node is WZCanvasProperty)
-                bw.Write(ds.AddCanvas((WZCanvasProperty)node));
-            else if (node is WZMP3Property)
-                bw.Write(ds.AddMP3((WZMP3Property)node));
-
-            switch(type) {
+            else if (node is WZCanvasProperty) {
+                WZCanvasProperty wzcp = (WZCanvasProperty)node;
+                bw.Write(ds.AddCanvas(wzcp));
+                if (dumpImg) {
+                    bw.Write((ushort)wzcp.Value.Width);
+                    bw.Write((ushort)wzcp.Value.Height);
+                    wzcp.Dispose();
+                } else {
+                    bw.Write(0);
+                }
+            }
+            else if (node is WZMP3Property) {
+                WZMP3Property wzmp = (WZMP3Property)node;
+                bw.Write(ds.AddMP3(wzmp));
+                if (dumpSnd) {
+                    bw.Write((uint)wzmp.Value.Length);
+                    wzmp.Dispose();
+                } else {
+                    bw.Write(0);
+                }
+            }
+            switch (type) {
                 case 0:
                     bw.Write(0L);
                     break;
-                case 1:
                 case 3:
-                case 5:
-                case 6:
                     bw.Write(0);
                     break;
             }
-
-            bw.Write(nextChildID);
         }
 
         private static void WriteString(string s, BinaryWriter bw)
