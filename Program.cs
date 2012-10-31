@@ -397,8 +397,7 @@ namespace WZ2NX
         private static void WriteBitmap(WZCanvasProperty node, BinaryWriter bw)
         {
             Bitmap b = node.Value;
-            bw.Write((ushort)b.Width);
-            bw.Write((ushort)b.Height);
+
 
             byte[] compressed = GetCompressedBitmap(b);
             node.Dispose();
@@ -411,7 +410,6 @@ namespace WZ2NX
         private static void WriteMP3(WZMP3Property node, BinaryWriter bw)
         {
             byte[] m = node.Value;
-            bw.Write((uint)m.Length);
             bw.Write(m);
             node.Dispose();
             m = null;
