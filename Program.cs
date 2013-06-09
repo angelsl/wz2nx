@@ -143,8 +143,7 @@ namespace WZ2NX
             s.Write(new byte[skip], 0, skip);
         }
 
-        private static void Main(string[] args)
-        {
+        private static void Main(string[] args) {
             #region Option parsing
 
             string inWz = null, outPath = null;
@@ -152,8 +151,10 @@ namespace WZ2NX
             bool initialEnc = true;
             OptionSet oSet = new OptionSet();
             oSet.Add("in=", "Path to input WZ; required.", a => inWz = a);
-            oSet.Add("out=", "Path to output NX; optional, defaults to <WZ file name>.nx in this directory", a => outPath = a);
-            oSet.Add("wzv=", "WZ encryption key; required.", a => wzVar = (WZVariant)Enum.Parse(typeof(WZVariant), a, true));
+            oSet.Add("out=", "Path to output NX; optional, defaults to <WZ file name>.nx in this directory",
+                     a => outPath = a);
+            oSet.Add("wzv=", "WZ encryption key; required.",
+                     a => wzVar = (WZVariant)Enum.Parse(typeof (WZVariant), a, true));
             oSet.Add("Ds|dumpsound", "Set to include sound properties in the NX file.", a => dumpSnd = true);
             oSet.Add("Di|dumpimage", "Set to include canvas properties in the NX file.", a => dumpImg = true);
             oSet.Add("wzn", "Set if the input WZ is not encrypted.", a => initialEnc = false);
@@ -163,120 +164,133 @@ namespace WZ2NX
                 oSet.WriteOptionDescriptions(Console.Out);
                 return;
             }
-            if (outPath == null)
-                outPath = Path.GetFileNameWithoutExtension(inWz) + ".nx";
+            if (outPath == null) outPath = Path.GetFileNameWithoutExtension(inWz) + ".nx";
 
             #endregion
 
-            Console.WriteLine("Input .wz: {0}{1}Output .nx: {2}", Path.GetFullPath(inWz), Environment.NewLine, Path.GetFullPath(outPath));
-            Stopwatch swOperation = new Stopwatch();
-            Stopwatch fullTimer = new Stopwatch();
+            Action run = () => {
+                             Console.WriteLine("Input .wz: {0}{1}Output .nx: {2}", Path.GetFullPath(inWz),
+                                               Environment.NewLine, Path.GetFullPath(outPath));
 
-            Action<string> reportDone = str => { Console.WriteLine("done. E{0} T{1}", swOperation.Elapsed, fullTimer.Elapsed);
-            swOperation.Restart(); Console.Write(str);};
+                             var swOperation = new Stopwatch();
+                             var fullTimer = new Stopwatch();
 
-            fullTimer.Start();
-            swOperation.Start();
-            Console.Write("Parsing input WZ... ".PadRight(31));
+                             Action<string> reportDone = str => {
+                                                             Console.WriteLine("done. E{0} T{1}", swOperation.Elapsed,
+                                                                               fullTimer.Elapsed);
+                                                             swOperation.Restart();
+                                                             Console.Write(str);
+                                                         };
 
-            WZReadSelection rFlags = WZReadSelection.EagerParseImage | WZReadSelection.EagerParseStrings;
-            if(!dumpImg) rFlags |= WZReadSelection.NeverParseCanvas;
+                             fullTimer.Start();
+                             swOperation.Start();
+                             Console.Write("Parsing input WZ... ".PadRight(31));
 
-            using (WZFile wzf = new WZFile(inWz, wzVar, initialEnc, rFlags))
-            using (FileStream outFs = new FileStream(outPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None))
-            using (BinaryWriter bw = new BinaryWriter(outFs)) {
-                DumpState state = new DumpState();
+                             WZReadSelection rFlags = WZReadSelection.EagerParseImage |
+                                                      WZReadSelection.EagerParseStrings;
+                             if (!dumpImg) rFlags |= WZReadSelection.NeverParseCanvas;
 
-                reportDone("Writing header... ".PadRight(31));
-                bw.Write(PKG4);
-                bw.Write(new byte[(4 + 8)*4]);
+                             using (var wzf = new WZFile(inWz, wzVar, initialEnc, rFlags))
+                             using (var outFs = new FileStream(outPath, FileMode.Create, FileAccess.ReadWrite,
+                                                            FileShare.None))
+                             using (var bw = new BinaryWriter(outFs)) {
+                                 var state = new DumpState();
 
-                reportDone("Writing nodes... ".PadRight(31));
-                outFs.EnsureMultiple(4);
-                ulong nodeOffset = (ulong)bw.BaseStream.Position;
-                List<WZObject> nodeLevel = new List<WZObject> {wzf.MainDirectory};
-                while(nodeLevel.Count > 0)
-                    WriteNodeLevel(ref nodeLevel, state, bw);
+                                 reportDone("Writing header... ".PadRight(31));
+                                 bw.Write(PKG4);
+                                 bw.Write(new byte[(4 + 8)*4]);
 
-                ulong stringOffset;
-                uint stringCount = (uint)state.Strings.Count;
-                {
-                    reportDone("Writing string data...".PadRight(31));
-                    Dictionary<uint, String> strings = state.Strings.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
-                    ulong[] offsets = new ulong[stringCount];
-                    for(uint idx = 0; idx < stringCount; ++idx) {
-                        outFs.EnsureMultiple(2);
-                        offsets[idx] = (ulong)bw.BaseStream.Position;
-                        WriteString(strings[idx], bw);
-                    }
+                                 reportDone("Writing nodes... ".PadRight(31));
+                                 outFs.EnsureMultiple(4);
+                                 var nodeOffset = (ulong)bw.BaseStream.Position;
+                                 var nodeLevel = new List<WZObject> {wzf.MainDirectory};
+                                 while (nodeLevel.Count > 0) WriteNodeLevel(ref nodeLevel, state, bw);
 
-                    outFs.EnsureMultiple(8);
-                    stringOffset = (ulong)bw.BaseStream.Position;
-                    for(uint idx = 0; idx < stringCount; ++idx)
-                        bw.Write(offsets[idx]);
-                }
+                                 ulong stringOffset;
+                                 var stringCount = (uint)state.Strings.Count;
+                                 {
+                                     reportDone("Writing string data...".PadRight(31));
+                                     Dictionary<uint, String> strings = state.Strings.ToDictionary(kvp => kvp.Value,
+                                                                                                   kvp => kvp.Key);
+                                     var offsets = new ulong[stringCount];
+                                     for (uint idx = 0; idx < stringCount; ++idx) {
+                                         outFs.EnsureMultiple(2);
+                                         offsets[idx] = (ulong)bw.BaseStream.Position;
+                                         WriteString(strings[idx], bw);
+                                     }
 
-                ulong bitmapOffset = 0UL;
-                uint bitmapCount = 0U;
-                if (dumpImg) {
-                    reportDone("Writing canvas data...".PadRight(31));
-                    bitmapCount = (uint)state.Canvases.Count;
-                    ulong[] offsets = new ulong[bitmapCount];
-                    long cId = 0;
-                    foreach (WZCanvasProperty cNode in state.Canvases) {
-                        outFs.EnsureMultiple(8);
-                        offsets[cId++] = (ulong)bw.BaseStream.Position;
-                        WriteBitmap(cNode, bw);
-                    }
-                    outFs.EnsureMultiple(8);
-                    bitmapOffset = (ulong)bw.BaseStream.Position;
-                    for (uint idx = 0; idx < bitmapCount; ++idx)
-                        bw.Write(offsets[idx]);
-                }
+                                     outFs.EnsureMultiple(8);
+                                     stringOffset = (ulong)bw.BaseStream.Position;
+                                     for (uint idx = 0; idx < stringCount; ++idx) bw.Write(offsets[idx]);
+                                 }
 
-                ulong soundOffset = 0UL;
-                uint soundCount = 0U;
-                if(dumpSnd) {
-                    reportDone("Writing MP3 data... ".PadRight(31));
-                    soundCount = (uint)state.MP3s.Count;
-                    ulong[] offsets = new ulong[soundCount];
-                    long cId = 0;
-                    foreach(WZMP3Property mNode in state.MP3s) {
-                        outFs.EnsureMultiple(8);
-                        offsets[cId++] = (ulong)bw.BaseStream.Position;
-                        WriteMP3(mNode, bw);
-                    }
-                    outFs.EnsureMultiple(8);
-                    soundOffset = (ulong)bw.BaseStream.Position;
-                    for (uint idx = 0; idx < soundCount; ++idx)
-                        bw.Write(offsets[idx]);
-                }
+                                 ulong bitmapOffset = 0UL;
+                                 uint bitmapCount = 0U;
+                                 if (dumpImg) {
+                                     reportDone("Writing canvas data...".PadRight(31));
+                                     bitmapCount = (uint)state.Canvases.Count;
+                                     var offsets = new ulong[bitmapCount];
+                                     long cId = 0;
+                                     foreach (WZCanvasProperty cNode in state.Canvases) {
+                                         outFs.EnsureMultiple(8);
+                                         offsets[cId++] = (ulong)bw.BaseStream.Position;
+                                         WriteBitmap(cNode, bw);
+                                     }
+                                     outFs.EnsureMultiple(8);
+                                     bitmapOffset = (ulong)bw.BaseStream.Position;
+                                     for (uint idx = 0; idx < bitmapCount; ++idx) bw.Write(offsets[idx]);
+                                 }
 
-                reportDone("Writing linked node data... ".PadRight(31));
-                byte[] uolReplace = new byte[16];
-                foreach(KeyValuePair<WZUOLProperty, Action<BinaryWriter, byte[]>> pair in state.UOLs) {
-                    WZObject result = SafeResolveUOL(pair.Key);
-                    if(result == null) continue;
-                    bw.BaseStream.Position = (long)(nodeOffset + state.GetNodeID(result)*20 + 4);
-                    bw.BaseStream.Read(uolReplace, 0, 16);
-                    pair.Value(bw, uolReplace);
-                }
+                                 ulong soundOffset = 0UL;
+                                 uint soundCount = 0U;
+                                 if (dumpSnd) {
+                                     reportDone("Writing MP3 data... ".PadRight(31));
+                                     soundCount = (uint)state.MP3s.Count;
+                                     var offsets = new ulong[soundCount];
+                                     long cId = 0;
+                                     foreach (WZMP3Property mNode in state.MP3s) {
+                                         outFs.EnsureMultiple(8);
+                                         offsets[cId++] = (ulong)bw.BaseStream.Position;
+                                         WriteMP3(mNode, bw);
+                                     }
+                                     outFs.EnsureMultiple(8);
+                                     soundOffset = (ulong)bw.BaseStream.Position;
+                                     for (uint idx = 0; idx < soundCount; ++idx) bw.Write(offsets[idx]);
+                                 }
 
-                reportDone("Finalising... ".PadRight(31));
+                                 reportDone("Writing linked node data... ".PadRight(31));
+                                 var uolReplace = new byte[16];
+                                 foreach (var pair in state.UOLs) {
+                                     WZObject result = SafeResolveUOL(pair.Key);
+                                     if (result == null) continue;
+                                     bw.BaseStream.Position = (long)(nodeOffset + state.GetNodeID(result)*20 + 4);
+                                     bw.BaseStream.Read(uolReplace, 0, 16);
+                                     pair.Value(bw, uolReplace);
+                                 }
 
-                bw.Seek(4, SeekOrigin.Begin);
-                bw.Write((uint)state.Nodes.Count);
-                bw.Write(nodeOffset);
-                bw.Write(stringCount);
-                bw.Write(stringOffset);
-                bw.Write(bitmapCount);
-                bw.Write(bitmapOffset);
-                bw.Write(soundCount);
-                bw.Write(soundOffset);
+                                 reportDone("Finalising... ".PadRight(31));
 
-                reportDone("Completed!");
+                                 bw.Seek(4, SeekOrigin.Begin);
+                                 bw.Write((uint)state.Nodes.Count);
+                                 bw.Write(nodeOffset);
+                                 bw.Write(stringCount);
+                                 bw.Write(stringOffset);
+                                 bw.Write(bitmapCount);
+                                 bw.Write(bitmapOffset);
+                                 bw.Write(soundCount);
+                                 bw.Write(soundOffset);
+
+                                 reportDone("Completed!");
+                             }
+                         };
+            try {
+                run();
+            } catch(Exception e) {
+                Console.WriteLine(e);
+                Console.WriteLine("Exception; toggling /wzn and retrying.");
+                initialEnc = !initialEnc;
+                run();
             }
-            Console.ReadLine();
         }
 
         private static WZObject SafeResolveUOL(WZUOLProperty uol)
