@@ -166,7 +166,7 @@ namespace WZ2NX {
                                      soundCount = (uint)state.MP3s.Count;
                                      var offsets = new ulong[soundCount];
                                      long cId = 0;
-                                     foreach (WZMP3Property mNode in state.MP3s) {
+                                     foreach (WZAudioProperty mNode in state.MP3s) {
                                          outFs.EnsureMultiple(8);
                                          offsets[cId++] = (ulong)bw.BaseStream.Position;
                                          WriteMP3(mNode, bw);
@@ -265,7 +265,7 @@ namespace WZ2NX {
             else if (node is WZStringProperty) type = 3; // String (4)
             else if (node is WZPointProperty) type = 4; // (0)
             else if (node is WZCanvasProperty) type = 5; // (4)
-            else if (node is WZMP3Property) type = 6; // (4)
+            else if (node is WZAudioProperty) type = 6; // (4)
             else throw new InvalidOperationException("Unhandled WZ node type [1]");
 
             bw.Write(type);
@@ -287,8 +287,8 @@ namespace WZ2NX {
                     bw.Write((ushort)wzcp.Value.Height);
                     wzcp.Dispose();
                 } else bw.Write(0);
-            } else if (node is WZMP3Property) {
-                var wzmp = (WZMP3Property)node;
+            } else if (node is WZAudioProperty) {
+                var wzmp = (WZAudioProperty)node;
                 bw.Write(ds.AddMP3(wzmp));
                 if (dumpSnd) {
                     bw.Write((uint)wzmp.Value.Length);
@@ -322,7 +322,7 @@ namespace WZ2NX {
             bw.Write(compressed);
         }
 
-        private static void WriteMP3(WZMP3Property node, BinaryWriter bw) {
+        private static void WriteMP3(WZAudioProperty node, BinaryWriter bw) {
             byte[] m = node.Value;
             bw.Write(m);
             node.Dispose();
@@ -355,7 +355,7 @@ namespace WZ2NX {
 
         private sealed class DumpState {
             private readonly List<WZCanvasProperty> _canvases;
-            private readonly List<WZMP3Property> _mp3s;
+            private readonly List<WZAudioProperty> _mp3s;
             private readonly Dictionary<WZObject, uint> _nodes;
             private readonly Dictionary<String, uint> _strings;
             private readonly Dictionary<WZUOLProperty, Action<BinaryWriter, byte[]>> _uols;
@@ -363,7 +363,7 @@ namespace WZ2NX {
             public DumpState() {
                 _canvases = new List<WZCanvasProperty>();
                 _strings = new Dictionary<string, uint>(StringComparer.Ordinal) {{"", 0}};
-                _mp3s = new List<WZMP3Property>();
+                _mp3s = new List<WZAudioProperty>();
                 _uols = new Dictionary<WZUOLProperty, Action<BinaryWriter, byte[]>>();
                 _nodes = new Dictionary<WZObject, uint>();
             }
@@ -376,7 +376,7 @@ namespace WZ2NX {
                 get { return _strings; }
             }
 
-            public List<WZMP3Property> MP3s {
+            public List<WZAudioProperty> MP3s {
                 get { return _mp3s; }
             }
 
@@ -394,7 +394,7 @@ namespace WZ2NX {
                 return ret;
             }
 
-            public uint AddMP3(WZMP3Property node) {
+            public uint AddMP3(WZAudioProperty node) {
                 var ret = (uint)_mp3s.Count;
                 _mp3s.Add(node);
                 return ret;
