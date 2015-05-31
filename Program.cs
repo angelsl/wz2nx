@@ -260,7 +260,7 @@ namespace WZ2NX {
 
             if (node is WZDirectory || node is WZImage || node is WZSubProperty || node is WZConvexProperty ||
                 node is WZNullProperty) type = 0; // no data; children only (8)
-            else if (node is WZInt32Property || node is WZUInt16Property) type = 1; // int32 (4)
+            else if (node is WZInt32Property || node is WZUInt16Property || node is WZInt64Property) type = 1; // int32 (4)
             else if (node is WZSingleProperty || node is WZDoubleProperty) type = 2; // Double (0)
             else if (node is WZStringProperty) type = 3; // String (4)
             else if (node is WZPointProperty) type = 4; // (0)
@@ -272,6 +272,7 @@ namespace WZ2NX {
 
             if (node is WZInt32Property) bw.Write((long)((WZInt32Property)node).Value);
             else if (node is WZUInt16Property) bw.Write((long)((WZUInt16Property)node).Value);
+            else if (node is WZInt64Property) bw.Write(((WZInt64Property)node).Value);
             else if (node is WZSingleProperty) bw.Write((double)((WZSingleProperty)node).Value);
             else if (node is WZDoubleProperty) bw.Write(((WZDoubleProperty)node).Value);
             else if (node is WZStringProperty) bw.Write(ds.AddString(((WZStringProperty)node).Value));
