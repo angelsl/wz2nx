@@ -339,6 +339,8 @@ namespace WZ2NX {
         }
 
         private static void WriteString(string s, BinaryWriter bw) {
+            if(s.Any(char.IsControl)) 
+                Console.WriteLine("Warning; control character in string. Perhaps toggle /wzn?");
             byte[] toWrite = Encoding.UTF8.GetBytes(s);
             bw.Write((ushort) toWrite.Length);
             bw.Write(toWrite);
