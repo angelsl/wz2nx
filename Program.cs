@@ -50,7 +50,7 @@ namespace WZ2NX {
     }
 
     internal static class Program {
-        private static readonly byte[] PKG4 = {0x50, 0x4B, 0x47, 0x34}; // PKG3
+        private static readonly byte[] PKG4 = {0x50, 0x4B, 0x47, 0x34}; // PKG4
         private static readonly bool _is64bit = IntPtr.Size == 8;
         private static bool dumpImg, dumpSnd;
 
