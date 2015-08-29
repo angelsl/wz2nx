@@ -336,22 +336,22 @@ namespace WZ2NX {
             int inLen = bd.Stride*bd.Height;
             int outLen = _is64bit ? EMaxOutputLen64(inLen) : EMaxOutputLen32(inLen);
             var outBuf = new byte[outLen];
-            outLen = _is64bit ? ECompressLZ464(bd.Scan0, outBuf, inLen) : ECompressLZ432(bd.Scan0, outBuf, inLen);
+            outLen = _is64bit ? ECompressLZ464(bd.Scan0, outBuf, inLen, outLen, 0) : ECompressLZ432(bd.Scan0, outBuf, inLen, outLen, 0);
             b.UnlockBits(bd);
             Array.Resize(ref outBuf, outLen);
             return outBuf;
         }
 
-        [DllImport("lz4_32.dll", EntryPoint = "LZ4_compressHC")]
-        private static extern int ECompressLZ432(IntPtr source, byte[] dest, int inputLen);
+        [DllImport("lz4hc_32.dll", CallingConvention = CallingConvention.Cdecl, EntryPoint = "LZ4_compress_HC")]
+        private static extern int ECompressLZ432(IntPtr source, byte[] dest, int inputLen, int maxSize, int level);
 
-        [DllImport("lz4_64.dll", EntryPoint = "LZ4_compressHC")]
-        private static extern int ECompressLZ464(IntPtr source, byte[] dest, int inputLen);
+        [DllImport("lz4hc_64.dll", CallingConvention = CallingConvention.Cdecl, EntryPoint = "LZ4_compress_HC")]
+        private static extern int ECompressLZ464(IntPtr source, byte[] dest, int inputLen, int maxSize, int level);
 
-        [DllImport("lz4_32.dll", EntryPoint = "LZ4_compressBound")]
+        [DllImport("lz4hc_32.dll", CallingConvention = CallingConvention.Cdecl, EntryPoint = "LZ4_compressBound")]
         private static extern int EMaxOutputLen32(int inputLen);
 
-        [DllImport("lz4_64.dll", EntryPoint = "LZ4_compressBound")]
+        [DllImport("lz4hc_64.dll", CallingConvention = CallingConvention.Cdecl, EntryPoint = "LZ4_compressBound")]
         private static extern int EMaxOutputLen64(int inputLen);
 
         private sealed class DumpState {
