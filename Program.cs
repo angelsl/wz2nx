@@ -199,7 +199,7 @@ namespace WZ2NX {
                 reportDone("Writing linked node data... ".PadRight(31));
                 byte[] uolReplace = new byte[16];
                 foreach (KeyValuePair<WZUOLProperty, Action<BinaryWriter, byte[]>> pair in state.UOLs) {
-                    WZObject result = SafeResolveUOL(pair.Key);
+                    WZObject result = pair.Key.FinalTarget;
                     if (result == null)
                         continue;
                     bw.BaseStream.Position = (long) (nodeOffset + state.GetNodeID(result)*20 + 4);
@@ -221,26 +221,6 @@ namespace WZ2NX {
 
                 reportDone("Completed!");
             }
-        }
-
-        private static WZObject SafeResolveUOL(WZUOLProperty uol) {
-            HashSet<WZObject> results = new HashSet<WZObject> {uol};
-
-            WZObject ret = uol;
-            try {
-                WZUOLProperty rUol;
-                while ((rUol = ret as WZUOLProperty) != null) {
-                    ret = rUol.Resolve();
-                    if (ret == null || results.Contains(ret))
-                        return null;
-                    results.Add(ret);
-                }
-            } catch (KeyNotFoundException) {
-                return null;
-            } catch (NotSupportedException) {
-                return null;
-            }
-            return ret;
         }
 
         private static void WriteNodeLevel(ref List<WZObject> nodeLevel, DumpState ds, BinaryWriter bw) {
