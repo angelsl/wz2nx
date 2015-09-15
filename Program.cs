@@ -1,4 +1,4 @@
-﻿// WZ2NX is copyright angelsl, 2011 to 2015 inclusive.
+// WZ2NX is copyright angelsl, 2011 to 2015 inclusive.
 // 
 // This file (Program.cs) is part of WZ2NX.
 // 
@@ -56,7 +56,7 @@ namespace WZ2NX {
         private static readonly byte[] HeaderWZMagic = {0x84, 0x41};
 
         private static readonly bool _is64bit = IntPtr.Size == 8;
-        
+
         private static readonly Stopwatch _swOperation = new Stopwatch();
         private static readonly Stopwatch _fullTimer = new Stopwatch();
 
@@ -200,7 +200,7 @@ namespace WZ2NX {
                     for (uint idx = 0; idx < stringCount; ++idx)
                         bw.Write(offsets[idx]);
                 }
-                
+
                 ReportTime("Writing linked node data...");
                 byte[] uolReplace = new byte[16];
                 foreach (KeyValuePair<WZUOLProperty, Action<BinaryWriter, byte[]>> pair in state.UOLs) {
@@ -332,7 +332,7 @@ namespace WZ2NX {
         }
 
         private static void WriteString(string s, BinaryWriter bw) {
-            if(s.Any(char.IsControl)) 
+            if (s.Any(char.IsControl))
                 Console.WriteLine("Warning; control character in string. Perhaps toggle /wzn?");
             byte[] toWrite = Encoding.UTF8.GetBytes(s);
             bw.Write((ushort) toWrite.Length);
@@ -383,7 +383,9 @@ namespace WZ2NX {
             inLen = bd.Stride*bd.Height;
             int outLen = _is64bit ? EMaxOutputLen64(inLen) : EMaxOutputLen32(inLen);
             byte[] outBuf = new byte[outLen];
-            outLen = _is64bit ? ECompressLZ464(bd.Scan0, outBuf, inLen, outLen, 0) : ECompressLZ432(bd.Scan0, outBuf, inLen, outLen, 0);
+            outLen = _is64bit
+                ? ECompressLZ464(bd.Scan0, outBuf, inLen, outLen, 0)
+                : ECompressLZ432(bd.Scan0, outBuf, inLen, outLen, 0);
             b.UnlockBits(bd);
             Array.Resize(ref outBuf, outLen);
             return outBuf;
