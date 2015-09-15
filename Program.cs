@@ -53,6 +53,7 @@ namespace WZ2NX {
         private static readonly byte[] PKG5 = {0x50, 0x4B, 0x47, 0x35}; // PKG5
         private static readonly byte[] WZBM = {0x57, 0x5A, 0x42, 0x4D}; // WZBM
         private static readonly byte[] WZAU = {0x57, 0x5A, 0x41, 0x55}; // WZAU
+        private static readonly byte[] HeaderWZMagic = {0x84, 0x41};
 
         private static readonly bool _is64bit = IntPtr.Size == 8;
         
@@ -139,6 +140,7 @@ namespace WZ2NX {
                 ReportTime("Writing header...");
                 bw.Write(PKG5);
                 bw.Write(new byte[(4 + 8)*3]);
+                bw.Write(HeaderWZMagic);
 
                 ReportTime("Writing nodes...");
                 outFs.EnsureMultiple(4);
