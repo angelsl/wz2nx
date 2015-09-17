@@ -363,12 +363,12 @@ namespace WZ2NX {
                 byte[] m = node.Value;
                 byte[] header = node.Header;
 
-                bw.Write(m.LongLength + header.LongLength);
-                bw.Write(m.LongLength + header.LongLength);
+                bw.Write(m.LongLength + header.LongLength + 2);
+                bw.Write(m.LongLength + header.LongLength + 2);
                 bw.Write((short) 0);
 
                 bw.Write(WZAU);
-                bw.Write(node.Length);
+                bw.Write(node.Duration);
                 bw.Write(0L);
 
                 bw.Write((ushort) header.Length);
