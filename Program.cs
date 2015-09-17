@@ -28,20 +28,37 @@
 // module is a module which is not derived from or based on WZ2NX.
 
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
 using CommandLine;
 using reWZ;
-using reWZ.WZProperties;
 
 namespace WZ2NX {
     internal static class Program {
+        private static readonly Stopwatch _perTask = new Stopwatch();
+        private static readonly Stopwatch _total = new Stopwatch();
+
+        public static void Main(string[] args) {
+            Parser.Default.ParseArguments<Options>(args).WithParsed(Run);
+        }
+
+        private static void Run(Options o) {
+            if (string.IsNullOrWhiteSpace(o.OutPath))
+                o.OutPath = Path.GetFileNameWithoutExtension(o.InPath) + ".nx";
+            _total.Start();
+            WZ2NX.Convert(o.InPath, o.OutPath, o.WZVariant, !o.WZNotEncrypted, o.DoAudio, o.DoBitmap, PrintStatus);
+            Console.WriteLine("OK. T{0}", _total.Elapsed);
+        }
+
+        private static void PrintStatus(string s, bool d) {
+            if (d)
+                Console.WriteLine("{0,-4} E{1} T{2}", s, _perTask.Elapsed, _total.Elapsed);
+            else {
+                _perTask.Restart();
+                Console.Write("{0,-31}", s + "...");
+            }
+        }
+
         private class Options {
             [Option('i', "in-path", Required = true, HelpText = "Path to the input WZ file.")]
             public string InPath { get; set; }
@@ -59,31 +76,9 @@ namespace WZ2NX {
             [Option('a', "dump-audio", Default = false, HelpText = "Set if the output NX file should contain audio.")]
             public bool DoAudio { get; set; }
 
-            [Option('b', "dump-bitmap", Default = false, HelpText = "Set if the output WZ file should contain bitmaps.")]
+            [Option('b', "dump-bitmap", Default = false, HelpText = "Set if the output WZ file should contain bitmaps.")
+            ]
             public bool DoBitmap { get; set; }
-        }
-        public static void Main(string[] args) {
-            Parser.Default.ParseArguments<Options>(args).WithParsed(Run);
-        }
-
-        private static readonly Stopwatch _perTask = new Stopwatch();
-        private static readonly Stopwatch _total = new Stopwatch();
-
-        private static void Run(Options o) {
-            if (string.IsNullOrWhiteSpace(o.OutPath))
-                o.OutPath = Path.GetFileNameWithoutExtension(o.InPath) + ".nx";
-            _total.Start();
-            WZ2NX.Convert(o.InPath, o.OutPath, o.WZVariant, !o.WZNotEncrypted, o.DoAudio, o.DoBitmap, PrintStatus);
-            Console.WriteLine("OK. T{0}", _total.Elapsed);
-        }
-
-        private static void PrintStatus(string s, bool d) {
-            if (d) {
-                Console.WriteLine("{0,-4} E{1} T{2}", s, _perTask.Elapsed, _total.Elapsed);
-            } else {
-                _perTask.Restart();
-                Console.Write("{0,-31}", s + "...");
-            }
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿// WZ2NX is copyright angelsl, 2011 to 2013 inclusive.
+// WZ2NX is copyright angelsl, 2011 to 2015 inclusive.
 // 
 // This file (AssemblyInfo.cs) is part of WZ2NX.
 // 

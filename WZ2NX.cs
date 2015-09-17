@@ -1,4 +1,33 @@
-﻿using System;
+// WZ2NX is copyright angelsl, 2011 to 2015 inclusive.
+// 
+// This file (WZ2NX.cs) is part of WZ2NX.
+// 
+// WZ2NX is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+// 
+// WZ2NX is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+// 
+// You should have received a copy of the GNU General Public License
+// along with WZ2NX. If not, see <http://www.gnu.org/licenses/>.
+// 
+// Linking WZ2NX statically or dynamically with other modules
+// is making a combined work based on WZ2NX. Thus, the terms and
+// conditions of the GNU General Public License cover the whole combination.
+// 
+// As a special exception, the copyright holders of WZ2NX give you
+// permission to link WZ2NX with independent modules to produce an
+// executable, regardless of the license terms of these independent modules,
+// and to copy and distribute the resulting executable under terms of your
+// choice, provided that you also meet, for each linked independent module,
+// the terms and conditions of the license of that module. An independent
+// module is a module which is not derived from or based on WZ2NX.
+
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -12,89 +41,17 @@ using reWZ.WZProperties;
 
 namespace WZ2NX {
     public class WZ2NX {
-        private class DumpState {
-            public DumpState(string inPath, string outPath, WZVariant wzType, bool wzEncrypted, bool doAudio, bool doBitmap, Action<string, bool> statusCallback) {
-                InPath = inPath;
-                OutPath = outPath;
-                WZType = wzType;
-                WZEncrypted = wzEncrypted;
-                DoAudio = doAudio;
-                DoBitmap = doBitmap;
-                _statusCallback = statusCallback;
-            }
+        private const int NodeSize = 20;
 
-            public string InPath { get; }
-            public string OutPath { get; }
-            public WZVariant WZType { get; }
-            public bool WZEncrypted { get; }
-            public bool DoAudio { get; }
-            public bool DoBitmap { get; }
-            public WZFile WZFile { get; set; }
-            public FileStream OutFileStream { get; set; }
-            public BinaryWriter OutWriter { get; set; }
+        private static readonly byte[] PKG5 = {0x50, 0x4B, 0x47, 0x35}; // PKG5
+        private static readonly byte[] WZBM = {0x57, 0x5A, 0x42, 0x4D}; // WZBM
+        private static readonly byte[] WZAU = {0x57, 0x5A, 0x41, 0x55}; // WZAU
+        private static readonly byte[] HeaderWZMagic = {0x84, 0x41};
 
-            public readonly long NodeBlockOffset = 44;
-            public long StringTableOffset { get; set; }
-            public long BlobTableOffset { get; set; }
+        private static readonly bool _is64bit = IntPtr.Size == 8;
 
-            private uint _nextStringID = 0;
-            private uint _nextNodeID = 0;
-            private uint _nextBlobID = 0;
-            private readonly Action<string, bool> _statusCallback;
-            private readonly Dictionary<string, uint> _stringsAdded = new Dictionary<string, uint>(65536, StringComparer.Ordinal);
-
-            public List<WZObject> Nodes { get; } = new List<WZObject>(65536);
-            public Dictionary<WZObject, uint> FirstChild { get; } = new Dictionary<WZObject, uint>(65536);
-            public Dictionary<WZObject, uint> ObjectToNodeID { get; } = new Dictionary<WZObject, uint>(65536);
-            public List<string> Strings { get; } = new List<string>(65536);
-            public List<WZObject> Blobs { get; } = new List<WZObject>(65536);
-
-            public Dictionary<WZObject, Task<BitmapCompressionResult>> BitmapCompression { get; } =
-                new Dictionary<WZObject, Task<BitmapCompressionResult>>(1024);
-
-            public uint AddNode(WZObject o) {
-                Nodes.Add(o);
-                ObjectToNodeID.Add(o, _nextNodeID);
-                return _nextNodeID++;
-            }
-
-            public uint AddString(string s) {
-                if (_stringsAdded.ContainsKey(s))
-                    return _stringsAdded[s];
-                _stringsAdded[s] = _nextStringID;
-                Strings.Add(s);
-                return _nextStringID++;
-            }
-
-            public uint AddBlob(WZObject o) {
-                Blobs.Add(o);
-                return _nextBlobID++;
-            }
-
-            public void Callback(string s, bool done = false) {
-                _statusCallback?.Invoke(s, done);
-            }
-
-            public void CallbackOK() {
-                Callback("OK", true);
-            }
-        }
-
-        private class BitmapCompressionResult {
-            public BitmapCompressionResult(int width, int height, byte[] compressedData, long rawLength) {
-                Width = width;
-                Height = height;
-                CompressedData = compressedData;
-                RawLength = rawLength;
-            }
-
-            public int Width { get; }
-            public int Height { get; }
-            public byte[] CompressedData { get; }
-            public long RawLength { get; }
-        }
-
-        public static void Convert(string inPath, string outPath, WZVariant wzType, bool wzEncrypted, bool doAudio, bool doBitmap, Action<string, bool> statusCallback) {
+        public static void Convert(string inPath, string outPath, WZVariant wzType, bool wzEncrypted, bool doAudio,
+            bool doBitmap, Action<string, bool> statusCallback) {
             /*
                 Brief outline:
                 Iterate through WZ file and collect all nodes
@@ -111,7 +68,8 @@ namespace WZ2NX {
 
             LoadWZFile(ds);
             FlattenTree(ds);
-            if(ds.DoBitmap) CompressBitmaps(ds);
+            if (ds.DoBitmap)
+                CompressBitmaps(ds);
             CreateOutFile(ds);
             WriteNodes(ds);
             WriteStrings(ds);
@@ -123,7 +81,8 @@ namespace WZ2NX {
 
         private static void LoadWZFile(DumpState ds) {
             ds.Callback("Parsing WZ file");
-            ds.WZFile = new WZFile(ds.InPath, ds.WZType, ds.WZEncrypted, WZReadSelection.EagerParseImage | WZReadSelection.EagerParseStrings);
+            ds.WZFile = new WZFile(ds.InPath, ds.WZType, ds.WZEncrypted,
+                WZReadSelection.EagerParseImage | WZReadSelection.EagerParseStrings);
             ds.CallbackOK();
         }
 
@@ -142,9 +101,8 @@ namespace WZ2NX {
                 if (first) {
                     ds.FirstChild[parent] = ds.AddNode(child);
                     first = false;
-                } else {
+                } else
                     ds.AddNode(child);
-                }
             }
             foreach (WZObject child in sortedChildren)
                 AddNodeLevel(ds, child);
@@ -155,7 +113,8 @@ namespace WZ2NX {
             foreach (WZObject node in ds.Nodes) {
                 if (node.Type != WZObjectType.Canvas)
                     continue;
-                ds.BitmapCompression[node] = Task.Factory.StartNew((Func<object, BitmapCompressionResult>) CompressBitmapWork, node);
+                ds.BitmapCompression[node] =
+                    Task.Factory.StartNew((Func<object, BitmapCompressionResult>) CompressBitmapWork, node);
             }
             ds.CallbackOK();
         }
@@ -166,10 +125,12 @@ namespace WZ2NX {
                 Bitmap b = c.Value;
                 BitmapData bd = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly,
                     PixelFormat.Format32bppArgb);
-                int inLen = bd.Stride * bd.Height;
+                int inLen = bd.Stride*bd.Height;
                 int outLen = _is64bit ? EMaxOutputLen64(inLen) : EMaxOutputLen32(inLen);
                 byte[] outBuf = new byte[outLen];
-                outLen = _is64bit ? ECompressLZ464(bd.Scan0, outBuf, inLen, outLen, 0) : ECompressLZ432(bd.Scan0, outBuf, inLen, outLen, 0);
+                outLen = _is64bit
+                    ? ECompressLZ464(bd.Scan0, outBuf, inLen, outLen, 0)
+                    : ECompressLZ432(bd.Scan0, outBuf, inLen, outLen, 0);
                 b.UnlockBits(bd);
                 Array.Resize(ref outBuf, outLen);
                 return new BitmapCompressionResult(b.Width, b.Height, outBuf, inLen);
@@ -193,9 +154,8 @@ namespace WZ2NX {
         private static void WriteNodes(DumpState ds) {
             ds.Callback("Writing nodes");
             ds.OutFileStream.Position = ds.NodeBlockOffset;
-            foreach (WZObject node in ds.Nodes) {
+            foreach (WZObject node in ds.Nodes)
                 WriteNode(ds, node);
-            }
             ds.CallbackOK();
         }
 
@@ -214,9 +174,8 @@ namespace WZ2NX {
 
             ds.OutFileStream.EnsureMultiple(8);
             ds.StringTableOffset = ds.OutFileStream.Position;
-            foreach (long offset in offsets) {
+            foreach (long offset in offsets)
                 w.Write(offset);
-            }
             ds.CallbackOK();
         }
 
@@ -240,7 +199,7 @@ namespace WZ2NX {
                         break;
                     }
                     case WZObjectType.Audio: {
-                        WriteAudio((WZAudioProperty)o, w);
+                        WriteAudio((WZAudioProperty) o, w);
                         break;
                     }
                     default:
@@ -250,9 +209,8 @@ namespace WZ2NX {
 
             ds.OutFileStream.EnsureMultiple(8);
             ds.BlobTableOffset = ds.OutFileStream.Position;
-            foreach (long offset in offsets) {
+            foreach (long offset in offsets)
                 w.Write(offset);
-            }
             ds.CallbackOK();
         }
 
@@ -295,16 +253,16 @@ namespace WZ2NX {
         }
 
         private static void WriteBitmap(BitmapCompressionResult bcr, BinaryWriter bw) {
-                bw.Write(bcr.CompressedData.LongLength);
-                bw.Write(bcr.RawLength);
-                bw.Write((short) 1);
+            bw.Write(bcr.CompressedData.LongLength);
+            bw.Write(bcr.RawLength);
+            bw.Write((short) 1);
 
-                bw.Write(WZBM);
-                bw.Write(0);
-                bw.Write(bcr.Width);
-                bw.Write(bcr.Height);
+            bw.Write(WZBM);
+            bw.Write(0);
+            bw.Write(bcr.Width);
+            bw.Write(bcr.Height);
 
-                bw.Write(bcr.CompressedData);
+            bw.Write(bcr.CompressedData);
         }
 
         private static void WriteAudio(WZAudioProperty node, BinaryWriter bw) {
@@ -334,7 +292,7 @@ namespace WZ2NX {
                 bw.Write((ushort) node.ChildCount);
             } else {
                 bw.Write(0U);
-                bw.Write((ushort)0);
+                bw.Write((ushort) 0);
             }
 
             ushort type;
@@ -392,11 +350,11 @@ namespace WZ2NX {
                     bw.Write(0);
                     break;
                 case WZObjectType.Point: {
-                        Point pNode = ((WZPointProperty) node).Value;
-                        bw.Write(pNode.X);
-                        bw.Write(pNode.Y);
-                        break;
-                    }
+                    Point pNode = ((WZPointProperty) node).Value;
+                    bw.Write(pNode.X);
+                    bw.Write(pNode.Y);
+                    break;
+                }
                 case WZObjectType.Audio:
                     bw.Write(ds.DoAudio ? ds.AddBlob(node) : 0U);
                     bw.Write(0);
@@ -413,14 +371,6 @@ namespace WZ2NX {
             }
         }
 
-        private static readonly byte[] PKG5 = { 0x50, 0x4B, 0x47, 0x35 }; // PKG5
-        private static readonly byte[] WZBM = { 0x57, 0x5A, 0x42, 0x4D }; // WZBM
-        private static readonly byte[] WZAU = { 0x57, 0x5A, 0x41, 0x55 }; // WZAU
-        private static readonly byte[] HeaderWZMagic = { 0x84, 0x41 };
-        private const int NodeSize = 20;
-
-        private static readonly bool _is64bit = IntPtr.Size == 8;
-
         [DllImport("lz4hc_32.dll", CallingConvention = CallingConvention.Cdecl, EntryPoint = "LZ4_compress_HC")]
         private static extern int ECompressLZ432(IntPtr source, byte[] dest, int inputLen, int maxSize, int level);
 
@@ -432,11 +382,97 @@ namespace WZ2NX {
 
         [DllImport("lz4hc_64.dll", CallingConvention = CallingConvention.Cdecl, EntryPoint = "LZ4_compressBound")]
         internal static extern int EMaxOutputLen64(int inputLen);
+
+        private class DumpState {
+            private readonly Action<string, bool> _statusCallback;
+
+            private readonly Dictionary<string, uint> _stringsAdded = new Dictionary<string, uint>(65536,
+                StringComparer.Ordinal);
+
+            public readonly long NodeBlockOffset = 44;
+            private uint _nextBlobID;
+            private uint _nextNodeID;
+
+            private uint _nextStringID;
+
+            public DumpState(string inPath, string outPath, WZVariant wzType, bool wzEncrypted, bool doAudio,
+                bool doBitmap, Action<string, bool> statusCallback) {
+                InPath = inPath;
+                OutPath = outPath;
+                WZType = wzType;
+                WZEncrypted = wzEncrypted;
+                DoAudio = doAudio;
+                DoBitmap = doBitmap;
+                _statusCallback = statusCallback;
+            }
+
+            public string InPath { get; }
+            public string OutPath { get; }
+            public WZVariant WZType { get; }
+            public bool WZEncrypted { get; }
+            public bool DoAudio { get; }
+            public bool DoBitmap { get; }
+            public WZFile WZFile { get; set; }
+            public FileStream OutFileStream { get; set; }
+            public BinaryWriter OutWriter { get; set; }
+            public long StringTableOffset { get; set; }
+            public long BlobTableOffset { get; set; }
+
+            public List<WZObject> Nodes { get; } = new List<WZObject>(65536);
+            public Dictionary<WZObject, uint> FirstChild { get; } = new Dictionary<WZObject, uint>(65536);
+            public Dictionary<WZObject, uint> ObjectToNodeID { get; } = new Dictionary<WZObject, uint>(65536);
+            public List<string> Strings { get; } = new List<string>(65536);
+            public List<WZObject> Blobs { get; } = new List<WZObject>(65536);
+
+            public Dictionary<WZObject, Task<BitmapCompressionResult>> BitmapCompression { get; } =
+                new Dictionary<WZObject, Task<BitmapCompressionResult>>(1024);
+
+            public uint AddNode(WZObject o) {
+                Nodes.Add(o);
+                ObjectToNodeID.Add(o, _nextNodeID);
+                return _nextNodeID++;
+            }
+
+            public uint AddString(string s) {
+                if (_stringsAdded.ContainsKey(s))
+                    return _stringsAdded[s];
+                _stringsAdded[s] = _nextStringID;
+                Strings.Add(s);
+                return _nextStringID++;
+            }
+
+            public uint AddBlob(WZObject o) {
+                Blobs.Add(o);
+                return _nextBlobID++;
+            }
+
+            public void Callback(string s, bool done = false) {
+                _statusCallback?.Invoke(s, done);
+            }
+
+            public void CallbackOK() {
+                Callback("OK", true);
+            }
+        }
+
+        private class BitmapCompressionResult {
+            public BitmapCompressionResult(int width, int height, byte[] compressedData, long rawLength) {
+                Width = width;
+                Height = height;
+                CompressedData = compressedData;
+                RawLength = rawLength;
+            }
+
+            public int Width { get; }
+            public int Height { get; }
+            public byte[] CompressedData { get; }
+            public long RawLength { get; }
+        }
     }
 
-    static class Extensions {
+    internal static class Extensions {
         internal static void EnsureMultiple(this Stream s, int multiple) {
-            int skip = (int) (multiple - (s.Position % multiple));
+            int skip = (int) (multiple - (s.Position%multiple));
             if (skip == multiple)
                 return;
             s.Write(new byte[skip], 0, skip);
