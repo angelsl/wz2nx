@@ -37,6 +37,7 @@ namespace WZ2NX {
     internal static class Program {
         private static readonly Stopwatch _perTask = new Stopwatch();
         private static readonly Stopwatch _total = new Stopwatch();
+        private static int _cx, _cy;
 
         public static void Main(string[] args) {
             Parser.Default.ParseArguments<Options>(args).WithParsed(Run);
@@ -46,17 +47,25 @@ namespace WZ2NX {
             if (string.IsNullOrWhiteSpace(o.OutPath))
                 o.OutPath = Path.GetFileNameWithoutExtension(o.InPath) + ".nx";
             _total.Start();
-            WZ2NX.Convert(o.InPath, o.OutPath, o.WZVariant, !o.WZNotEncrypted, o.DoAudio, o.DoBitmap, PrintStatus);
+            WZ2NX.Convert(o.InPath, o.OutPath, o.WZVariant, !o.WZNotEncrypted, o.DoAudio, o.DoBitmap, PrintStatus, PrintProgress);
             Console.WriteLine("OK. T{0}", _total.Elapsed);
         }
 
         private static void PrintStatus(string s, bool d) {
-            if (d)
-                Console.WriteLine("{0,-4} E{1} T{2}", s, _perTask.Elapsed, _total.Elapsed);
-            else {
+            if (d) {
+                Console.SetCursorPosition(_cx, _cy);
+                Console.WriteLine("{0,-10} E{1} T{2}", s, _perTask.Elapsed, _total.Elapsed);
+            } else {
                 _perTask.Restart();
-                Console.Write("{0,-31}", s + "...");
+                Console.Write("{0,-35}", s + "...");
+                _cx = Console.CursorLeft;
+                _cy = Console.CursorTop;
             }
+        }
+
+        private static void PrintProgress(int p, int q) {
+            Console.SetCursorPosition(_cx, _cy);
+            Console.Write($"{p}/{q}".PadLeft(15));
         }
 
         private class Options {

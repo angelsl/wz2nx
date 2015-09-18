@@ -28,13 +28,16 @@
 // module is a module which is not derived from or based on WZ2NX.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using reWZ;
 using reWZ.WZProperties;
@@ -51,25 +54,10 @@ namespace WZ2NX {
         private static readonly bool _is64bit = IntPtr.Size == 8;
 
         public static void Convert(string inPath, string outPath, WZVariant wzType, bool wzEncrypted, bool doAudio,
-            bool doBitmap, Action<string, bool> statusCallback) {
-            /*
-                Brief outline:
-                Iterate through WZ file and collect all nodes
-                Start compressing bitmaps
-                Write nodes and collect strings
-                Write strings
-                Write byte arrays
-                Write UOLs
-                Finalise
-            */
-            DumpState ds = new DumpState(inPath, outPath, wzType, wzEncrypted, doAudio, doBitmap, statusCallback);
-
-            ds.AddBlob(null);
+            bool doBitmap, Action<string, bool> statusCallback, Action<int, int> bitmapCallback) {
+            DumpState ds = new DumpState(inPath, outPath, wzType, wzEncrypted, doAudio, doBitmap, statusCallback, bitmapCallback);
 
             LoadWZFile(ds);
-            FlattenTree(ds);
-            if (ds.DoBitmap)
-                CompressBitmaps(ds);
             CreateOutFile(ds);
             WriteNodes(ds);
             WriteStrings(ds);
@@ -81,48 +69,77 @@ namespace WZ2NX {
 
         private static void LoadWZFile(DumpState ds) {
             ds.Callback("Parsing WZ file");
-            ds.WZFile = new WZFile(ds.InPath, ds.WZType, ds.WZEncrypted,
-                WZReadSelection.EagerParseImage | WZReadSelection.EagerParseStrings);
+            ds.WZFile = new WZFile(ds.InPath, ds.WZType, ds.WZEncrypted);
             ds.CallbackOK();
         }
 
-        private static void FlattenTree(DumpState ds) {
-            ds.Callback("Collecting nodes");
-            WZDirectory root = ds.WZFile.MainDirectory;
-            ds.AddNode(root);
-            AddNodeLevel(ds, root);
-            ds.CallbackOK();
-        }
+        private static void WriteNodes(DumpState ds) {
+            ds.Callback("Writing nodes");
+            ds.NodeBlockStream = new MemoryStream(100*1024*1024);
+            ds.NodeBlockWriter = new BinaryWriter(ds.NodeBlockStream);
+            
+            ConcurrentQueue<Tuple<int, WZImage>> parsed = new ConcurrentQueue<Tuple<int, WZImage>>();
+            int pendingTasks = 0;
+            ManualResetEventSlim parsedLock = new ManualResetEventSlim(false);
 
-        private static void AddNodeLevel(DumpState ds, WZObject parent) {
-            IEnumerable<WZObject> sortedChildren = parent.OrderBy(o => o.Name, StringComparer.Ordinal);
-            bool first = true;
-            foreach (WZObject child in sortedChildren) {
-                if (first) {
-                    ds.FirstChild[parent] = ds.AddNode(child);
-                    first = false;
-                } else
-                    ds.AddNode(child);
+            List<WZObject> nodes = ds.Nodes;
+            int current = 0, remaining = 1;
+            nodes.Add(ds.WZFile.MainDirectory);
+            while (remaining > 0) {
+                WZObject curNode = nodes[current];
+                ds.ObjectToNodeID[curNode] = (uint) current;
+                if (curNode.Type == WZObjectType.Image) {
+                    int currentCopy = current;
+                    ds.NodeBlockStream.Position += NodeSize; // Fill in later
+                    pendingTasks++;
+                    Task.Factory.StartNew(() => {
+                        WZImage image = (WZImage) curNode;
+                        image.GetEnumerator();
+                        parsed.Enqueue(Tuple.Create(currentCopy, image));
+                        parsedLock.Set();
+                    });
+                    remaining -= 1;
+                } else {
+                    WriteNode(ds, curNode, (uint) (current + remaining));
+                    nodes.AddRange(curNode.OrderBy(o => o.Name, StringComparer.Ordinal));
+                    remaining += -1 + curNode.ChildCount;
+                }
+                ++current;
             }
-            foreach (WZObject child in sortedChildren)
-                AddNodeLevel(ds, child);
-        }
 
-        private static void CompressBitmaps(DumpState ds) {
-            ds.Callback("Starting bitmap compression");
-            foreach (WZObject node in ds.Nodes) {
-                if (node.Type != WZObjectType.Canvas)
+            while (pendingTasks > 0) {
+                parsedLock.Wait();
+                Tuple<int, WZImage> result;
+                if (!parsed.TryDequeue(out result)) {
+                    parsedLock.Reset();
                     continue;
-                ds.BitmapCompression[node] =
-                    Task.Factory.StartNew((Func<object, BitmapCompressionResult>) CompressBitmapWork, node);
+                }
+                ds.NodeBlockStream.Position = result.Item1*NodeSize;
+                WriteNode(ds, result.Item2, (uint) (current + remaining));
+                nodes.AddRange(result.Item2.OrderBy(o => o.Name, StringComparer.Ordinal));
+                remaining += result.Item2.ChildCount;
+                --pendingTasks;
             }
-            ds.CallbackOK();
+
+            ds.NodeBlockStream.Position = current * NodeSize;
+            while (remaining > 0) {
+                WZObject curNode = nodes[current];
+                ds.ObjectToNodeID[curNode] = (uint) current;
+                WriteNode(ds, curNode, (uint) (current + remaining));
+                nodes.AddRange(curNode.OrderBy(o => o.Name, StringComparer.Ordinal));
+                remaining += -1 + curNode.ChildCount;
+                ++current;
+            }
+
+            ds.OutFileStream.Position = ds.NodeBlockOffset;
+            ds.NodeBlockStream.Position = 0;
+            ds.NodeBlockStream.CopyTo(ds.OutFileStream);
+            ds.CallbackOK(current);
         }
 
-        private static BitmapCompressionResult CompressBitmapWork(object o) {
-            WZCanvasProperty c = (WZCanvasProperty) o;
-            using (c) {
-                Bitmap b = c.Value;
+        private static BitmapCompressionResult CompressBitmapWork(WZCanvasProperty o, uint id) {
+            using (o) {
+                Bitmap b = o.Value;
                 BitmapData bd = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly,
                     PixelFormat.Format32bppArgb);
                 int inLen = bd.Stride*bd.Height;
@@ -133,7 +150,7 @@ namespace WZ2NX {
                     : ECompressLZ432(bd.Scan0, outBuf, inLen, outLen, 0);
                 b.UnlockBits(bd);
                 Array.Resize(ref outBuf, outLen);
-                return new BitmapCompressionResult(b.Width, b.Height, outBuf, inLen);
+                return new BitmapCompressionResult(id, b.Width, b.Height, outBuf, inLen);
             }
         }
 
@@ -151,18 +168,10 @@ namespace WZ2NX {
             ds.WZFile = null;
         }
 
-        private static void WriteNodes(DumpState ds) {
-            ds.Callback("Writing nodes");
-            ds.OutFileStream.Position = ds.NodeBlockOffset;
-            foreach (WZObject node in ds.Nodes)
-                WriteNode(ds, node);
-            ds.CallbackOK();
-        }
-
         private static void WriteStrings(DumpState ds) {
-            ds.Callback("Writing strings");
             BinaryWriter w = ds.OutWriter;
 
+            ds.Callback("Writing strings");
             List<long> offsets = new List<long>(ds.Strings.Count);
             foreach (string str in ds.Strings) {
                 ds.OutFileStream.EnsureMultiple(2);
@@ -171,53 +180,74 @@ namespace WZ2NX {
                 w.Write((ushort) toWrite.Length);
                 w.Write(toWrite);
             }
+            ds.CallbackOK(offsets.Count);
 
+            ds.Callback("Writing string offset table");
             ds.OutFileStream.EnsureMultiple(8);
             ds.StringTableOffset = ds.OutFileStream.Position;
             foreach (long offset in offsets)
                 w.Write(offset);
-            ds.CallbackOK();
+            ds.CallbackOK(offsets.Count);
         }
 
         private static void WriteBlobs(DumpState ds) {
-            ds.Callback("Writing blobs");
             BinaryWriter w = ds.OutWriter;
+            long[] offsets = new long[ds.BlobCount];
 
-            List<long> offsets = new List<long>(ds.Blobs.Count);
-            foreach (WZObject o in ds.Blobs) {
+            // Write null blob
+            {
                 ds.OutFileStream.EnsureMultiple(8);
-                offsets.Add(ds.OutFileStream.Position);
-                if (o == null) {
-                    w.Write(new byte[34]);
-                    continue;
-                }
-                switch (o.Type) {
-                    case WZObjectType.Canvas: {
-                        Task<BitmapCompressionResult> task = ds.BitmapCompression[o];
-                        task.Wait();
-                        WriteBitmap(task.Result, w);
-                        break;
-                    }
-                    case WZObjectType.Audio: {
-                        WriteAudio((WZAudioProperty) o, w);
-                        break;
-                    }
-                    default:
-                        throw new InvalidOperationException($"Invalid WZ blob type {o.Type}");
-                }
+                offsets[0] = ds.OutFileStream.Position;
             }
 
+            // Write audio blobs
+            ds.Callback("Writing audio");
+            foreach (Tuple<uint, WZAudioProperty> o in ds.Audios) {
+                ds.OutFileStream.EnsureMultiple(8);
+                offsets[o.Item1] = ds.OutFileStream.Position;
+                WriteAudio(o.Item2, w);
+            }
+            ds.CallbackOK(ds.Audios.Count);
+
+            // Write bitmaps
+            {
+                ds.Callback("Writing bitmaps");
+                int bitmapsWritten = 0, bitmapCount = ds.BitmapCount;
+                ManualResetEventSlim @lock = ds.BitmapCompletionLock;
+                ConcurrentQueue<BitmapCompressionResult> results = ds.CompressedBitmaps;
+                while (bitmapsWritten < bitmapCount) {
+                    @lock.Wait();
+                    BitmapCompressionResult bcr;
+                    if (!results.TryDequeue(out bcr)) {
+                        @lock.Reset();
+                        continue;
+                    }
+                    ds.OutFileStream.EnsureMultiple(8);
+                    offsets[bcr.ID] = ds.OutFileStream.Position;
+                    WriteBitmap(bcr, w);
+                    ++bitmapsWritten;
+                    if((bitmapsWritten & 0x7FF) == 0x400) ds.BitmapCallback(bitmapsWritten, bitmapCount);
+                }
+                Debug.Assert(bitmapsWritten == bitmapCount);
+                Debug.Assert(results.IsEmpty);
+                ds.CallbackOK(bitmapsWritten);
+            }
+
+            ds.Callback("Writing blob offset table");
             ds.OutFileStream.EnsureMultiple(8);
             ds.BlobTableOffset = ds.OutFileStream.Position;
-            foreach (long offset in offsets)
+            foreach (long offset in offsets) {
+                Debug.Assert(offset > ds.NodeBlockOffset);
                 w.Write(offset);
-            ds.CallbackOK();
+            }
+            ds.CallbackOK(offsets.Length);
         }
 
         private static void FixUOLs(DumpState ds) {
             ds.Callback("Resolving UOLs");
             BinaryWriter w = ds.OutWriter;
 
+            int count = 0;
             foreach (WZObject o in ds.Nodes) {
                 if (o.Type != WZObjectType.UOL)
                     continue;
@@ -232,8 +262,9 @@ namespace WZ2NX {
                 ds.OutFileStream.Read(copy, 0, copy.Length);
                 ds.OutFileStream.Position = ds.NodeBlockOffset + myId*NodeSize + 4;
                 w.Write(copy);
+                ++count;
             }
-            ds.CallbackOK();
+            ds.CallbackOK(count);
         }
 
         private static void WriteHeader(DumpState ds) {
@@ -246,7 +277,7 @@ namespace WZ2NX {
             w.Write(ds.NodeBlockOffset);
             w.Write(ds.Strings.Count);
             w.Write(ds.StringTableOffset);
-            w.Write(ds.Blobs.Count);
+            w.Write(ds.BlobCount); // +1 for the empty blob
             w.Write(ds.BlobTableOffset);
             w.Write(HeaderWZMagic);
             ds.CallbackOK();
@@ -284,16 +315,11 @@ namespace WZ2NX {
             }
         }
 
-        private static void WriteNode(DumpState ds, WZObject node) {
-            BinaryWriter bw = ds.OutWriter;
+        private static void WriteNode(DumpState ds, WZObject node, uint firstChild) {
+            BinaryWriter bw = ds.NodeBlockWriter;
             bw.Write(ds.AddString(node.Name));
-            if (node.ChildCount > 0) {
-                bw.Write(ds.FirstChild[node]);
-                bw.Write((ushort) node.ChildCount);
-            } else {
-                bw.Write(0U);
-                bw.Write((ushort) 0);
-            }
+            bw.Write(firstChild);
+            bw.Write((ushort) node.ChildCount);
 
             ushort type;
             switch (node.Type) {
@@ -356,11 +382,13 @@ namespace WZ2NX {
                     break;
                 }
                 case WZObjectType.Audio:
-                    bw.Write(ds.DoAudio ? ds.AddBlob(node) : 0U);
+                    // Blob 0 is the empty blob
+                    bw.Write(ds.DoAudio ? ds.AddAudio((WZAudioProperty) node) : 0U); 
                     bw.Write(0);
                     break;
                 case WZObjectType.Canvas:
-                    bw.Write(ds.DoBitmap ? ds.AddBlob(node) : 0U);
+                    // Blob 0 is the empty blob
+                    bw.Write(ds.DoBitmap ? ds.AddBitmap((WZCanvasProperty) node) : 0U);
                     bw.Write(0);
                     break;
                 default:
@@ -390,13 +418,11 @@ namespace WZ2NX {
                 StringComparer.Ordinal);
 
             public readonly long NodeBlockOffset = 44;
-            private uint _nextBlobID;
-            private uint _nextNodeID;
-
+            private uint _nextBlobID = 1; // Blob 0 is the empty blob
             private uint _nextStringID;
 
             public DumpState(string inPath, string outPath, WZVariant wzType, bool wzEncrypted, bool doAudio,
-                bool doBitmap, Action<string, bool> statusCallback) {
+                bool doBitmap, Action<string, bool> statusCallback, Action<int, int> bitmapCallback) {
                 InPath = inPath;
                 OutPath = outPath;
                 WZType = wzType;
@@ -404,7 +430,9 @@ namespace WZ2NX {
                 DoAudio = doAudio;
                 DoBitmap = doBitmap;
                 _statusCallback = statusCallback;
+                BitmapCallback = bitmapCallback;
             }
+
 
             public string InPath { get; }
             public string OutPath { get; }
@@ -412,26 +440,25 @@ namespace WZ2NX {
             public bool WZEncrypted { get; }
             public bool DoAudio { get; }
             public bool DoBitmap { get; }
+
+            public Action<int, int> BitmapCallback { get; }
+
             public WZFile WZFile { get; set; }
             public FileStream OutFileStream { get; set; }
             public BinaryWriter OutWriter { get; set; }
+            public MemoryStream NodeBlockStream { get; set; }
+            public BinaryWriter NodeBlockWriter { get; set; }
             public long StringTableOffset { get; set; }
             public long BlobTableOffset { get; set; }
+            public int BitmapCount { get; private set; }
+            public int BlobCount => (int) _nextBlobID;
 
             public List<WZObject> Nodes { get; } = new List<WZObject>(65536);
-            public Dictionary<WZObject, uint> FirstChild { get; } = new Dictionary<WZObject, uint>(65536);
             public Dictionary<WZObject, uint> ObjectToNodeID { get; } = new Dictionary<WZObject, uint>(65536);
             public List<string> Strings { get; } = new List<string>(65536);
-            public List<WZObject> Blobs { get; } = new List<WZObject>(65536);
-
-            public Dictionary<WZObject, Task<BitmapCompressionResult>> BitmapCompression { get; } =
-                new Dictionary<WZObject, Task<BitmapCompressionResult>>(1024);
-
-            public uint AddNode(WZObject o) {
-                Nodes.Add(o);
-                ObjectToNodeID.Add(o, _nextNodeID);
-                return _nextNodeID++;
-            }
+            public List<Tuple<uint, WZAudioProperty>> Audios { get; } = new List<Tuple<uint, WZAudioProperty>>(1024);
+            public ConcurrentQueue<BitmapCompressionResult> CompressedBitmaps { get; } = new ConcurrentQueue<BitmapCompressionResult>();
+            public ManualResetEventSlim BitmapCompletionLock { get; } = new ManualResetEventSlim(false);
 
             public uint AddString(string s) {
                 if (_stringsAdded.ContainsKey(s))
@@ -441,9 +468,20 @@ namespace WZ2NX {
                 return _nextStringID++;
             }
 
-            public uint AddBlob(WZObject o) {
-                Blobs.Add(o);
+            public uint AddAudio(WZAudioProperty o) {
+                Audios.Add(Tuple.Create(_nextBlobID, o));
                 return _nextBlobID++;
+            }
+
+            public uint AddBitmap(WZCanvasProperty o) {
+                uint thisId = _nextBlobID++;
+                Task.Factory.StartNew(() => {
+                    BitmapCompressionResult bcr = CompressBitmapWork(o, thisId);
+                    CompressedBitmaps.Enqueue(bcr);
+                    BitmapCompletionLock.Set();
+                });
+                BitmapCount++;
+                return thisId;
             }
 
             public void Callback(string s, bool done = false) {
@@ -453,16 +491,22 @@ namespace WZ2NX {
             public void CallbackOK() {
                 Callback("OK", true);
             }
+
+            public void CallbackOK(int count) {
+                Callback($"{count} OK", true);
+            }
         }
 
         private class BitmapCompressionResult {
-            public BitmapCompressionResult(int width, int height, byte[] compressedData, long rawLength) {
+            public BitmapCompressionResult(uint id, int width, int height, byte[] compressedData, long rawLength) {
+                ID = id;
                 Width = width;
                 Height = height;
                 CompressedData = compressedData;
                 RawLength = rawLength;
             }
 
+            public uint ID { get; }
             public int Width { get; }
             public int Height { get; }
             public byte[] CompressedData { get; }
