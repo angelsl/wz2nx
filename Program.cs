@@ -49,6 +49,8 @@ namespace WZ2NX {
             _total.Start();
             WZ2NX.Convert(o.InPath, o.OutPath, o.WZVariant, !o.WZNotEncrypted, o.DoAudio, o.DoBitmap, PrintStatus, PrintProgress);
             Console.WriteLine("OK. T{0}", _total.Elapsed);
+            Console.WriteLine(Path.GetFullPath(o.InPath));
+            Console.WriteLine("==> {0}", Path.GetFullPath(o.OutPath));
         }
 
         private static void PrintStatus(string s, bool d) {
